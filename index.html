@@ -1,0 +1,403 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#10282F">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" type="image/png" href="icon-192.png">
+<link rel="apple-touch-icon" href="icon-192.png">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="CardioControl Mante">
+<title>CardioControl Mante</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Atkinson+Hyperlegible:wght@400;700&display=swap" rel="stylesheet">
+<style>
+:root{
+  --paper:#F3F7F7; --card:#FFFFFF; --ink:#10282F; --muted:#587076; --line:#D3DEDF;
+  --brand:#0E6E6E; --on-brand:#FFFFFF; --alert:#B4380F; --alert-bg:#FCE9E1; --ok:#2F6B3A;
+  box-sizing:border-box;
+  padding-top:env(safe-area-inset-top,0px); padding-bottom:env(safe-area-inset-bottom,0px);
+}
+@media (prefers-color-scheme:dark){
+  :root:not([data-theme="light"]){
+    --paper:#0D1A1E; --card:#14262B; --ink:#E8F1F2; --muted:#93AAB0; --line:#27414A;
+    --brand:#3FB5B0; --on-brand:#06201F; --alert:#FF9A73; --alert-bg:#3A2018; --ok:#7BC58A;
+  }
+}
+*,*::before,*::after{box-sizing:inherit}
+html{scroll-padding-top:env(safe-area-inset-top,0px)}
+body{margin:0;background:var(--paper);color:var(--ink);font:400 18px/1.5 "Atkinson Hyperlegible",system-ui,sans-serif}
+#app{max-width:640px;margin:0 auto;padding:16px 16px 48px}
+h1{font-size:1.6rem;line-height:1.2;margin:0}
+h2{font-size:1.25rem;margin:28px 0 12px}
+p{margin:0 0 12px}
+.top{display:flex;justify-content:space-between;align-items:center;gap:12px;margin-bottom:20px}
+.top .quien{color:var(--muted);font-size:.95rem}
+button,input,select,textarea{font:inherit;color:inherit}
+button{cursor:pointer;border:1px solid var(--line);background:var(--card);border-radius:10px;padding:12px 16px;min-height:48px}
+button.primario{background:var(--brand);color:var(--on-brand);border-color:var(--brand);font-weight:700;width:100%}
+button.enlace{border:0;background:none;color:var(--brand);padding:8px;min-height:44px;text-decoration:underline}
+:focus-visible{outline:3px solid var(--brand);outline-offset:2px}
+label{display:block;font-weight:700;margin:14px 0 6px}
+input,select,textarea{width:100%;background:var(--card);border:1px solid var(--line);border-radius:10px;padding:12px;min-height:48px}
+textarea{min-height:80px}
+.tipos{display:grid;grid-template-columns:1fr 1fr;gap:8px}
+.tipos button[aria-pressed="true"]{background:var(--brand);color:var(--on-brand);border-color:var(--brand);font-weight:700}
+.tipos button:last-child:nth-child(odd){grid-column:1/-1}
+.panel{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:4px 16px 18px;margin-top:12px}
+.msg{min-height:1.5em;margin-top:12px;font-weight:700}
+.msg.error{color:var(--alert)} .msg.ok{color:var(--ok)}
+.lista{list-style:none;margin:0;padding:0;display:grid;gap:8px}
+.item{background:var(--card);border:1px solid var(--line);border-left:6px solid var(--line);border-radius:10px;padding:10px 14px}
+.item.alerta{border-left-color:var(--alert);background:var(--alert-bg)}
+.item .cuando{color:var(--muted);font-size:.9rem}
+.item .que{font-weight:700}
+.item .aviso{color:var(--alert);font-weight:700;font-size:.95rem}
+.pac{width:100%;text-align:left;display:block}
+.pac .n{font-weight:700}
+.pac .d{color:var(--muted);font-size:.9rem}
+.pac.alerta{border-left:6px solid var(--alert)}
+.vacio{color:var(--muted)}
+svg{width:100%;height:auto;display:block}
+svg text{fill:var(--muted);font-size:10px}
+.leyenda{display:flex;gap:16px;font-size:.9rem;color:var(--muted);margin-top:4px}
+.marca{display:flex;align-items:center;gap:12px;min-width:0}
+img.logo{width:56px;height:56px;border-radius:14px;flex:none}
+.instalar{max-width:640px;margin:0 auto;padding:16px 16px 0}
+.instalar .panel{margin-top:0;padding-top:16px}
+.instalar p{margin:6px 0 12px}
+.invitar{display:grid;grid-template-columns:1fr auto;gap:8px;margin-bottom:16px}
+a.btn-wa{display:flex;align-items:center;justify-content:center;min-height:48px;padding:0 16px;border-radius:10px;background:var(--brand);color:var(--on-brand);font-weight:700;text-decoration:none}
+</style>
+</head>
+<body>
+<div id="instalar" class="instalar" hidden></div>
+<div id="app"><p class="vacio">Cargando…</p></div>
+
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.58.0/dist/umd/supabase.min.js"></script>
+<script>
+/* ================== CONFIGURACIÓN ================== */
+const SUPABASE_URL = 'https://weifxnszhirnmsxsfago.supabase.co';
+const SUPABASE_KEY = 'sb_publishable_Zb-xmUeyX1BB6aVBxCAT2w_5-5xMyJO';
+
+/* Umbrales de alerta para el panel del administrador.
+   Ajústalos a tu criterio clínico: [mínimo, máximo]. */
+const LIM = {
+  sistolica: [90, 180],
+  diastolica: [50, 110],
+  pulso: [45, 120],
+  glucosa: [70, 250],
+  inr: [1.5, 4.0],
+  palpitacionesMin: 30   // minutos de duración que se marcan como alerta
+};
+
+/* ================== UTILIDADES ================== */
+const db = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
+const app = document.getElementById('app');
+const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const ahoraLocal = () => { const d = new Date(); d.setMinutes(d.getMinutes() - d.getTimezoneOffset()); return d.toISOString().slice(0, 16); };
+const fecha = iso => new Date(iso).toLocaleString('es', { weekday:'short', day:'numeric', month:'short', hour:'2-digit', minute:'2-digit' });
+const state = { user:null, perfil:null, tipo:'presion', modoRegistro:false, pacientes:[], regs:[], sel:null, canal:null };
+
+const TIPOS = {
+  presion: { t:'Presión y pulso', campos:[
+    ['sistolica','Sistólica (mmHg)','number'],['diastolica','Diastólica (mmHg)','number'],['pulso','Pulso (latidos por minuto)','number'] ] },
+  peso: { t:'Peso y talla', campos:[
+    ['peso_kg','Peso (kg)','number','0.1'],['talla_cm','Talla (cm)','number','0.1'] ] },
+  palpitaciones: { t:'Palpitaciones', campos:[
+    ['palp_duracion_min','Duración (minutos)','number'],['palp_episodios','Episodios en el día','number'],['pulso','Pulso durante el episodio (lpm)','number'] ] },
+  glucosa: { t:'Glucosa', campos:[
+    ['glucosa_mgdl','Glucosa (mg/dL)','number'],
+    ['glucosa_momento','¿Cuándo la midió?','select',[['ayuno','En ayunas'],['antes_comida','Antes de comer'],['despues_comida','Después de comer'],['otro','Otro momento']]] ] },
+  laboratorio: { t:'Laboratorio e INR', campos:[
+    ['inr','INR (control anticoagulante)','number','0.1'],['lab_nombre','Otro estudio (nombre)','text'],['lab_valor','Resultado','number','any'],['lab_unidad','Unidad','text'] ] }
+};
+
+function resumen(r) {
+  switch (r.tipo) {
+    case 'presion': return `${r.sistolica ?? '—'}/${r.diastolica ?? '—'} mmHg, pulso ${r.pulso ?? '—'}`;
+    case 'peso': return [r.peso_kg != null ? r.peso_kg + ' kg' : null, r.talla_cm != null ? r.talla_cm + ' cm' : null].filter(Boolean).join(', ');
+    case 'palpitaciones': return `Palpitaciones: ${r.palp_duracion_min ?? '—'} min, ${r.palp_episodios ?? '—'} episodio(s)` + (r.pulso != null ? `, pulso ${r.pulso}` : '');
+    case 'glucosa': return `Glucosa ${r.glucosa_mgdl} mg/dL (${({ayuno:'en ayunas',antes_comida:'antes de comer',despues_comida:'después de comer',otro:'otro momento'})[r.glucosa_momento] || '—'})`;
+    case 'laboratorio': return [r.inr != null ? 'INR ' + r.inr : null, r.lab_nombre ? `${r.lab_nombre} ${r.lab_valor ?? ''} ${r.lab_unidad ?? ''}`.trim() : null].filter(Boolean).join(', ');
+  }
+  return '';
+}
+
+function alertas(r) {
+  const a = [];
+  const fuera = (v, [lo, hi], n) => { if (v != null && (v < lo || v > hi)) a.push(`${n} ${v}`); };
+  fuera(r.sistolica, LIM.sistolica, 'Sistólica');
+  fuera(r.diastolica, LIM.diastolica, 'Diastólica');
+  fuera(r.pulso, LIM.pulso, 'Pulso');
+  fuera(r.glucosa_mgdl, LIM.glucosa, 'Glucosa');
+  fuera(r.inr, LIM.inr, 'INR');
+  if (r.palp_duracion_min != null && r.palp_duracion_min >= LIM.palpitacionesMin) a.push(`Palpitaciones de ${r.palp_duracion_min} min`);
+  return a;
+}
+
+function itemHTML(r) {
+  const al = alertas(r);
+  return `<li class="item${al.length ? ' alerta' : ''}">
+    <div class="cuando">${esc(fecha(r.medido_en))}</div>
+    <div class="que">${esc(resumen(r))}</div>
+    ${r.notas ? `<div>${esc(r.notas)}</div>` : ''}
+    ${al.length ? `<div class="aviso">Fuera de rango: ${esc(al.join(', '))}</div>` : ''}
+  </li>`;
+}
+
+/* ================== ACCESO ================== */
+function vistaAcceso(modo = 'entrar', error = '') {
+  const reg = modo === 'registro';
+  app.innerHTML = `
+    <div class="top"><div class="marca"><img class="logo" src="icon-192.png" alt=""><h1>CardioControl Mante</h1></div></div>
+    <div class="panel">
+      <form id="f-acceso" novalidate>
+        ${reg ? `<label for="nombre">Nombre completo</label><input id="nombre" autocomplete="name" required>` : ''}
+        <label for="correo">Correo electrónico</label>
+        <input id="correo" type="email" autocomplete="email" required>
+        <label for="clave">Contraseña${reg ? ' (mínimo 8 caracteres)' : ''}</label>
+        <input id="clave" type="password" autocomplete="${reg ? 'new-password' : 'current-password'}" required>
+        <div class="msg error" id="msg" role="alert">${esc(error)}</div>
+        <button class="primario" type="submit">${reg ? 'Crear mi cuenta' : 'Entrar'}</button>
+      </form>
+    </div>
+    <p style="text-align:center;margin-top:12px">
+      <button class="enlace" id="cambiar">${reg ? 'Ya tengo cuenta: entrar' : 'Primera vez: crear mi cuenta'}</button>
+    </p>`;
+  document.getElementById('cambiar').onclick = () => vistaAcceso(reg ? 'entrar' : 'registro');
+  document.getElementById('f-acceso').onsubmit = async e => {
+    e.preventDefault();
+    const correo = document.getElementById('correo').value.trim();
+    const clave = document.getElementById('clave').value;
+    const msg = document.getElementById('msg');
+    msg.textContent = '';
+    if (reg) {
+      const nombre = document.getElementById('nombre').value.trim();
+      if (!nombre) { msg.textContent = 'Escribe tu nombre completo.'; return; }
+      const { data, error } = await db.auth.signUp({ email: correo, password: clave, options: { data: { nombre } } });
+      if (error) { msg.textContent = 'No se pudo crear la cuenta: ' + error.message; return; }
+      if (!data.session) { msg.className = 'msg ok'; msg.textContent = 'Cuenta creada. Revisa tu correo para confirmarla y luego entra.'; }
+    } else {
+      const { error } = await db.auth.signInWithPassword({ email: correo, password: clave });
+      if (error) msg.textContent = 'Correo o contraseña incorrectos.';
+    }
+  };
+}
+
+async function salir() { if (state.canal) { db.removeChannel(state.canal); state.canal = null; } await db.auth.signOut(); }
+
+function encabezado(subtitulo) {
+  return `<div class="top"><div class="marca"><img class="logo" src="icon-192.png" alt=""><div><h1>CardioControl Mante</h1><div class="quien">${esc(subtitulo)}</div></div></div>
+    <button id="salir">Salir</button></div>`;
+}
+
+/* ================== PACIENTE ================== */
+async function vistaPaciente() {
+  const { data, error } = await db.from('registros').select('*')
+    .eq('paciente_id', state.user.id).order('medido_en', { ascending: false }).limit(40);
+  state.regs = error ? [] : data;
+  const tipo = TIPOS[state.tipo];
+
+  const campo = ([id, etiqueta, tipoInput, extra]) => {
+    if (tipoInput === 'select') {
+      return `<label for="${id}">${etiqueta}</label><select id="${id}"><option value="">Elegir…</option>${extra.map(([v, t]) => `<option value="${v}">${t}</option>`).join('')}</select>`;
+    }
+    const paso = tipoInput === 'number' ? ` inputmode="decimal" step="${extra || '1'}"` : '';
+    return `<label for="${id}">${etiqueta}</label><input id="${id}" type="${tipoInput}"${paso}>`;
+  };
+
+  app.innerHTML = `
+    ${encabezado(state.perfil.nombre || state.user.email)}
+    <h2 style="margin-top:0">¿Qué quieres anotar?</h2>
+    <div class="tipos" role="group" aria-label="Tipo de registro">
+      ${Object.entries(TIPOS).map(([k, v]) => `<button data-tipo="${k}" aria-pressed="${k === state.tipo}">${v.t}</button>`).join('')}
+    </div>
+    <form id="f-reg" class="panel" novalidate>
+      ${tipo.campos.map(campo).join('')}
+      <label for="medido_en">Fecha y hora${state.tipo === 'palpitaciones' ? ' en que empezaron' : ''}</label>
+      <input id="medido_en" type="datetime-local" value="${ahoraLocal()}">
+      <label for="notas">Notas (opcional)</label>
+      <textarea id="notas"></textarea>
+      <div class="msg" id="msg" role="status"></div>
+      <button class="primario" type="submit">Guardar registro</button>
+    </form>
+    <h2>Mis últimos registros</h2>
+    ${state.regs.length ? `<ul class="lista">${state.regs.map(itemHTML).join('')}</ul>` : '<p class="vacio">Todavía no has guardado ningún registro.</p>'}
+    <p class="vacio" style="margin-top:24px">Si tiene dolor en el pecho, falta de aire intensa o desmayo, no use esta aplicación: llame a emergencias.</p>`;
+
+  document.getElementById('salir').onclick = salir;
+  document.querySelectorAll('[data-tipo]').forEach(b => b.onclick = () => { state.tipo = b.dataset.tipo; vistaPaciente(); });
+  document.getElementById('f-reg').onsubmit = guardarRegistro;
+}
+
+async function guardarRegistro(e) {
+  e.preventDefault();
+  const msg = document.getElementById('msg');
+  const fila = { paciente_id: state.user.id, tipo: state.tipo };
+  let hayDato = false;
+  for (const [id, , tipoInput] of TIPOS[state.tipo].campos) {
+    const v = document.getElementById(id).value.trim();
+    if (v === '') continue;
+    fila[id] = tipoInput === 'number' ? Number(v) : v;
+    if (tipoInput === 'number') hayDato = true;
+  }
+  if (!hayDato) { msg.className = 'msg error'; msg.textContent = 'Escribe al menos un valor antes de guardar.'; return; }
+  const cuando = document.getElementById('medido_en').value;
+  fila.medido_en = cuando ? new Date(cuando).toISOString() : new Date().toISOString();
+  const notas = document.getElementById('notas').value.trim();
+  if (notas) fila.notas = notas;
+  const { error } = await db.from('registros').insert(fila);
+  if (error) { msg.className = 'msg error'; msg.textContent = 'No se pudo guardar: ' + error.message; return; }
+  await vistaPaciente();
+  const nuevo = document.getElementById('msg');
+  nuevo.className = 'msg ok'; nuevo.textContent = 'Registro guardado.';
+}
+
+/* ================== ADMINISTRADOR ================== */
+async function vistaAdmin() {
+  await cargarAdmin();
+  if (!state.canal) {
+    state.canal = db.channel('registros-nuevos')
+      .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'registros' }, () => cargarAdmin())
+      .subscribe();
+  }
+}
+
+async function cargarAdmin() {
+  const [p, r] = await Promise.all([
+    db.from('profiles').select('id,nombre,rol').eq('rol', 'paciente').order('nombre'),
+    db.from('registros').select('*').order('medido_en', { ascending: false }).limit(2000)
+  ]);
+  state.pacientes = p.data || [];
+  state.regs = r.data || [];
+  pintarAdmin();
+}
+
+function pintarAdmin() {
+  if (state.sel) return pintarPaciente();
+  const hace7 = Date.now() - 7 * 864e5;
+  const filas = state.pacientes.map(p => {
+    const regs = state.regs.filter(x => x.paciente_id === p.id);
+    const nAl = regs.filter(x => new Date(x.medido_en).getTime() >= hace7 && alertas(x).length).length;
+    return { p, regs, nAl };
+  }).sort((a, b) => b.nAl - a.nAl);
+  app.innerHTML = `
+    ${encabezado('Administrador')}
+    <div class="invitar">
+      <a class="btn-wa" href="${enlaceWhatsApp()}" target="_blank" rel="noopener">Invitar paciente por WhatsApp</a>
+      <button id="copiar">Copiar enlace</button>
+    </div>
+    <h2 style="margin-top:0">Pacientes (${filas.length})</h2>
+    ${filas.length ? `<ul class="lista">${filas.map(({ p, regs, nAl }) => `
+      <li><button class="pac item${nAl ? ' alerta' : ''}" data-pac="${p.id}">
+        <div class="n">${esc(p.nombre || 'Sin nombre')}</div>
+        <div class="d">${regs.length ? 'Último registro: ' + esc(fecha(regs[0].medido_en)) : 'Sin registros'}</div>
+        ${nAl ? `<div class="aviso">${nAl} registro(s) fuera de rango en 7 días</div>` : ''}
+      </button></li>`).join('')}</ul>` : '<p class="vacio">Aún no hay pacientes registrados. Comparte el enlace de la app para que creen su cuenta.</p>'}`;
+  document.getElementById('salir').onclick = salir;
+  document.getElementById('copiar').onclick = copiarEnlace;
+  document.querySelectorAll('[data-pac]').forEach(b => b.onclick = () => { state.sel = b.dataset.pac; pintarAdmin(); });
+}
+
+function grafica(regs) {
+  const p = regs.filter(r => r.tipo === 'presion').slice(0, 30).reverse();
+  if (p.length < 2) return '<p class="vacio">Se necesitan al menos 2 mediciones de presión para graficar.</p>';
+  const W = 320, H = 150, m = 26;
+  const vals = p.flatMap(r => [r.sistolica, r.diastolica]).filter(v => v != null);
+  const min = Math.min(...vals, 50) - 5, max = Math.max(...vals, 140) + 5;
+  const x = i => m + i * (W - m * 1.5) / (p.length - 1);
+  const y = v => H - m + 4 - (v - min) * (H - m * 1.6) / (max - min);
+  const linea = k => p.map((r, i) => r[k] == null ? null : `${x(i).toFixed(1)},${y(r[k]).toFixed(1)}`).filter(Boolean).join(' ');
+  return `<svg viewBox="0 0 ${W} ${H}" role="img" aria-label="Tendencia de presión arterial">
+      <text x="2" y="${y(max - 5).toFixed(0)}">${Math.round(max - 5)}</text>
+      <text x="2" y="${y(min + 5).toFixed(0)}">${Math.round(min + 5)}</text>
+      <line x1="${m}" x2="${W}" y1="${y(LIM.sistolica[1]).toFixed(1)}" y2="${y(LIM.sistolica[1]).toFixed(1)}" stroke="var(--alert)" stroke-dasharray="2 4" opacity=".6"/>
+      <polyline points="${linea('sistolica')}" fill="none" stroke="var(--brand)" stroke-width="2.5" stroke-linejoin="round"/>
+      <polyline points="${linea('diastolica')}" fill="none" stroke="var(--muted)" stroke-width="2.5" stroke-dasharray="5 3" stroke-linejoin="round"/>
+    </svg>
+    <div class="leyenda"><span>Línea continua: sistólica</span><span>Línea discontinua: diastólica</span></div>`;
+}
+
+function pintarPaciente() {
+  const p = state.pacientes.find(x => x.id === state.sel);
+  if (!p) { state.sel = null; return pintarAdmin(); }
+  const regs = state.regs.filter(x => x.paciente_id === p.id);
+  app.innerHTML = `
+    ${encabezado('Administrador')}
+    <button id="volver" class="enlace" style="padding-left:0">Volver a pacientes</button>
+    <h2 style="margin-top:4px">${esc(p.nombre || 'Sin nombre')}</h2>
+    <div class="panel" style="padding-top:16px">${grafica(regs)}</div>
+    <h2>Historial</h2>
+    ${regs.length ? `<ul class="lista">${regs.slice(0, 100).map(itemHTML).join('')}</ul>` : '<p class="vacio">Sin registros.</p>'}`;
+  document.getElementById('salir').onclick = salir;
+  document.getElementById('volver').onclick = () => { state.sel = null; pintarAdmin(); };
+}
+
+/* ================== COMPARTIR E INSTALAR ================== */
+const urlApp = () => location.origin + location.pathname.replace(/index\.html$/, '');
+
+function enlaceWhatsApp() {
+  const texto = 'Hola, le comparto la aplicación para registrar sus mediciones (presión, pulso, peso, glucosa, palpitaciones e INR). ' +
+    'Ábrala aquí: ' + urlApp() + '\n\nToque «Primera vez: crear mi cuenta» y use su correo. ' +
+    'Después puede instalarla en su celular para abrirla con un toque.';
+  return 'https://wa.me/?text=' + encodeURIComponent(texto);
+}
+
+async function copiarEnlace() {
+  const b = document.getElementById('copiar');
+  try { await navigator.clipboard.writeText(urlApp()); b.textContent = 'Enlace copiado'; }
+  catch (e) { b.textContent = urlApp(); }
+  setTimeout(() => { if (b) b.textContent = 'Copiar enlace'; }, 2500);
+}
+
+let eventoInstalar = null;
+const esStandalone = () => window.matchMedia('(display-mode: standalone)').matches || navigator.standalone === true;
+const esIOS = () => /iphone|ipad|ipod/i.test(navigator.userAgent);
+
+function pintarInstalar() {
+  const c = document.getElementById('instalar');
+  let oculto = false;
+  try { oculto = localStorage.getItem('ocultar_instalar') === '1'; } catch (e) {}
+  if (esStandalone() || oculto || (!eventoInstalar && !esIOS())) { c.hidden = true; return; }
+  c.hidden = false;
+  c.innerHTML = `<div class="panel">
+    <strong>Tenga esta app en su celular</strong>
+    ${eventoInstalar
+      ? '<p>Instálela para abrirla con un toque, como cualquier otra app.</p><button class="primario" id="btn-instalar">Instalar app</button>'
+      : '<p>En iPhone: toque el botón Compartir y elija «Agregar a pantalla de inicio».</p>'}
+    <button class="enlace" id="btn-ahora-no">Ahora no</button>
+  </div>`;
+  const bi = document.getElementById('btn-instalar');
+  if (bi) bi.onclick = async () => { eventoInstalar.prompt(); await eventoInstalar.userChoice; eventoInstalar = null; pintarInstalar(); };
+  document.getElementById('btn-ahora-no').onclick = () => {
+    try { localStorage.setItem('ocultar_instalar', '1'); } catch (e) {}
+    c.hidden = true;
+  };
+}
+window.addEventListener('beforeinstallprompt', e => { e.preventDefault(); eventoInstalar = e; pintarInstalar(); });
+window.addEventListener('appinstalled', () => { eventoInstalar = null; pintarInstalar(); });
+pintarInstalar();
+if ('serviceWorker' in navigator) {
+  window.addEventListener('load', () => navigator.serviceWorker.register('sw.js').catch(() => {}));
+}
+
+/* ================== ARRANQUE ================== */
+async function iniciar(session) {
+  if (!session) { state.user = null; state.perfil = null; state.sel = null; return vistaAcceso(); }
+  state.user = session.user;
+  const { data } = await db.from('profiles').select('*').eq('id', session.user.id).single();
+  state.perfil = data || { nombre: '', rol: 'paciente' };
+  return state.perfil.rol === 'admin' ? vistaAdmin() : vistaPaciente();
+}
+
+db.auth.onAuthStateChange((evento, session) => {
+  if (evento === 'TOKEN_REFRESHED') return;
+  setTimeout(() => iniciar(session), 0);
+});
+</script>
+</body>
+</html>
