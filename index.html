@@ -90,6 +90,9 @@ a.btn-wa{display:flex;align-items:center;justify-content:center;min-height:48px;
 const SUPABASE_URL = 'https://weifxnszhirnmsxsfago.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_Zb-xmUeyX1BB6aVBxCAT2w_5-5xMyJO';
 
+/* Nombre y especialidad que aparecen en la pantalla de acceso. Cámbialos aquí si quieres. */
+const MEDICO = { nombre: 'Dr. Rodolfo Ramírez Campillo', especialidad: 'Cardiología' };
+
 /* Umbrales de alerta para el panel del administrador.
    Ajústalos a tu criterio clínico: [mínimo, máximo]. */
 const LIM = {
@@ -120,7 +123,10 @@ const TIPOS = {
     ['glucosa_mgdl','Glucosa (mg/dL)','number'],
     ['glucosa_momento','¿Cuándo la midió?','select',[['ayuno','En ayunas'],['antes_comida','Antes de comer'],['despues_comida','Después de comer'],['otro','Otro momento']]] ] },
   laboratorio: { t:'Laboratorio e INR', campos:[
-    ['inr','INR (control anticoagulante)','number','0.1'],['lab_nombre','Otro estudio (nombre)','text'],['lab_valor','Resultado','number','any'],['lab_unidad','Unidad','text'] ] }
+    ['inr','INR (control anticoagulante)','number','0.1'],
+    ['lab_nombre','Estudio de laboratorio','select',[['Creatinina sérica','Creatinina sérica'],['NT-proBNP','NT-proBNP'],['HbA1c','HbA1c'],['Glucosa (laboratorio)','Glucosa (laboratorio)'],['Colesterol total','Colesterol total'],['Triglicéridos','Triglicéridos'],['HDL','HDL'],['LDL','LDL'],['Otro','Otro (escribir el nombre)']]],
+    ['lab_otro','Nombre del estudio (solo si eligió Otro)','text'],
+    ['lab_valor','Resultado','number','any'],['lab_unidad','Unidad','text'] ] }
 };
 
 function resumen(r) {
@@ -146,6 +152,9 @@ function alertas(r, p) {
     else if (!(p && p.indicacion)) fuera(r.inr, LIM.inr, 'INR');
   }
   if (r.palp_duracion_min != null && r.palp_duracion_min >= LIM.palpitacionesMin) a.push(`Palpitaciones de ${r.palp_duracion_min} min`);
+  if (r.tipo === 'laboratorio' && r.lab_nombre === 'LDL' && r.lab_valor != null && p && LDL_META[p.riesgo_cv] != null && Number(r.lab_valor) >= LDL_META[p.riesgo_cv]) {
+    a.push(`LDL ${r.lab_valor} (meta menor de ${LDL_META[p.riesgo_cv]})`);
+  }
   return a;
 }
 
@@ -159,11 +168,12 @@ function itemHTML(r, p, verAlertas) {
   </li>`;
 }
 
-/* ================== META DE INR Y GUÍA ================== */
-/* Rangos de referencia: ACC/AHA 2020 (valvulopatías), ESC/EACTS 2021 y guías de fibrilación auricular.
-   El médico decide la meta de cada paciente; "Personalizado" permite cualquier rango. */
+/* ================== META DE INR, RIESGO Y LABORATORIO ================== */
+/* INR: ACC/AHA 2020 (valvulopatías), ESC/EACTS 2021 y guías de FA. El médico decide la meta de cada paciente. */
 const PRESETS = [
-  { id: '', t: 'Elegir indicación…' },
+  { id: '', t: 'Sin definir' },
+  { id: 'ninguno', t: 'No toma anticoagulante' },
+  { id: 'doac', t: 'Anticoagulante directo (inhibidor del factor Xa o dabigatrán): sin INR', alias: 'Anticoagulante directo (sin control de INR)' },
   { id: 'fa_vka', t: 'Fibrilación auricular con warfarina', min: 2.0, max: 3.0 },
   { id: 'em_fa', t: 'Estenosis mitral reumática moderada o grave con FA', min: 2.0, max: 3.0 },
   { id: 'mec_ao', t: 'Prótesis mecánica aórtica, sin factores de riesgo', min: 2.0, max: 3.0 },
@@ -171,25 +181,56 @@ const PRESETS = [
   { id: 'mec_mi', t: 'Prótesis mecánica mitral o tricuspídea', min: 2.5, max: 3.5 },
   { id: 'bio', t: 'Bioprótesis quirúrgica (primeros 3 a 6 meses)', min: 2.0, max: 3.0 },
   { id: 'onx', t: 'Prótesis aórtica On-X (después de 3 meses)', min: 1.5, max: 2.0 },
-  { id: 'doac', t: 'Anticoagulante directo (sin control de INR)' },
   { id: 'otro', t: 'Personalizado' }
 ];
 
+/* Estudios de laboratorio con gráfica. Unidades en mg/dL salvo indicación. */
+const LABS = [
+  { n: 'Creatinina sérica', u: 'mg/dL' },
+  { n: 'NT-proBNP', u: 'pg/mL' },
+  { n: 'HbA1c', u: '%' },
+  { n: 'Glucosa (laboratorio)', u: 'mg/dL' },
+  { n: 'Colesterol total', u: 'mg/dL' },
+  { n: 'Triglicéridos', u: 'mg/dL' },
+  { n: 'HDL', u: 'mg/dL' },
+  { n: 'LDL', u: 'mg/dL' }
+];
+
+/* Riesgo cardiovascular y meta de LDL (ESC/EAS 2019), en mg/dL: se alerta si el LDL es igual o mayor. */
+const RIESGOS = ['Bajo', 'Moderado', 'Alto', 'Muy alto'];
+const LDL_META = { 'Bajo': 116, 'Moderado': 100, 'Alto': 70, 'Muy alto': 55 };
+
 const tieneMeta = p => p && p.inr_min != null && p.inr_max != null;
 const rangoTexto = p => Number(p.inr_min).toFixed(1) + ' a ' + Number(p.inr_max).toFixed(1);
+const fmt = v => String(Math.round(v * 100) / 100);
+const fechaCorta = iso => new Date(iso).toLocaleDateString('es', { day: 'numeric', month: 'short', year: '2-digit' });
+
+function grupoAnticoag(p) {
+  p = p || {};
+  if (tieneMeta(p)) return 'vka';
+  const x = p.indicacion ? PRESETS.find(z => z.id && (z.t === p.indicacion || z.alias === p.indicacion)) : null;
+  if (x && x.id === 'doac') return 'doac';
+  if (x && x.id === 'ninguno') return 'ninguno';
+  return 'sin';
+}
+
+function camposActivos() {
+  return TIPOS[state.tipo].campos.filter(c => !(c[0] === 'inr' && !tieneMeta(state.perfil)));
+}
 
 function metaTextoAdmin(p) {
   if (tieneMeta(p)) return 'Meta de INR ' + rangoTexto(p);
   if (p.indicacion) return esc(p.indicacion);
-  return 'Meta de INR sin definir';
+  return 'Anticoagulación sin definir';
 }
 
 function metaPacienteHTML(p) {
   return tieneMeta(p) ? `<p style="margin:16px 0 0">Su meta de INR, indicada por su médico: <strong>${rangoTexto(p)}</strong></p>` : '';
 }
 
+/* ---------- Administrador: anticoagulación ---------- */
 function anticoagulacionHTML(p) {
-  const sel = PRESETS.find(x => x.t === p.indicacion) || (p.indicacion ? PRESETS.find(x => x.id === 'otro') : PRESETS[0]);
+  const sel = (p.indicacion ? PRESETS.find(x => x.id && (x.t === p.indicacion || x.alias === p.indicacion)) : null) || (p.indicacion ? PRESETS.find(x => x.id === 'otro') : PRESETS[0]);
   return `<h2>Anticoagulación</h2>
   <div class="panel" style="padding-top:12px">
     <label for="indic">Indicación</label>
@@ -198,9 +239,9 @@ function anticoagulacionHTML(p) {
     <input id="imin" type="number" inputmode="decimal" step="0.1" value="${p.inr_min ?? ''}">
     <label for="imax">INR máximo</label>
     <input id="imax" type="number" inputmode="decimal" step="0.1" value="${p.inr_max ?? ''}">
-    <p class="nota" style="margin-top:12px">Metas de referencia según ACC/AHA 2020, ESC/EACTS 2021 y guías de fibrilación auricular. Para prótesis de mayor trombogenicidad o riesgo individual alto, use Personalizado.</p>
+    <p class="nota" style="margin-top:12px">Metas de referencia según ACC/AHA 2020, ESC/EACTS 2021 y guías de fibrilación auricular. Para prótesis de mayor trombogenicidad o riesgo individual alto, use Personalizado. Con «No toma anticoagulante» o un anticoagulante directo el paciente no verá el campo de INR.</p>
     <div class="msg" id="msg-inr" role="status"></div>
-    <button class="primario" id="guardar-inr">Guardar meta</button>
+    <button class="primario" id="guardar-inr">Guardar</button>
   </div>`;
 }
 
@@ -209,59 +250,147 @@ function enlazarAnticoagulacion(p) {
   const iMin = document.getElementById('imin');
   const iMax = document.getElementById('imax');
   const msg = document.getElementById('msg-inr');
-  const ajustar = () => { iMin.disabled = iMax.disabled = (selI.value === 'doac'); };
+  const sinINR = () => ['', 'ninguno', 'doac'].includes(selI.value);
+  const ajustar = () => { iMin.disabled = iMax.disabled = sinINR(); };
   selI.onchange = () => {
     const x = PRESETS.find(z => z.id === selI.value);
     if (x && x.min != null) { iMin.value = x.min.toFixed(1); iMax.value = x.max.toFixed(1); }
-    if (x && x.id === 'doac') { iMin.value = ''; iMax.value = ''; }
+    if (sinINR()) { iMin.value = ''; iMax.value = ''; }
     ajustar();
   };
   ajustar();
   document.getElementById('guardar-inr').onclick = async () => {
     const x = PRESETS.find(z => z.id === selI.value);
-    if (!x || !x.id) { msg.className = 'msg error'; msg.textContent = 'Elige una indicación.'; return; }
     let min = null, max = null;
-    if (x.id !== 'doac') {
+    if (!sinINR()) {
       min = parseFloat(iMin.value); max = parseFloat(iMax.value);
       if (!(min >= 1 && max <= 5 && min < max)) { msg.className = 'msg error'; msg.textContent = 'Escribe un rango válido, por ejemplo 2.0 a 3.0.'; return; }
     }
-    const { error } = await db.from('profiles').update({ inr_min: min, inr_max: max, indicacion: x.t }).eq('id', p.id);
+    const indicacion = x && x.id ? x.t : null;
+    const { error } = await db.from('profiles').update({ inr_min: min, inr_max: max, indicacion }).eq('id', p.id);
     if (error) { msg.className = 'msg error'; msg.textContent = 'No se pudo guardar: ' + error.message; return; }
-    p.inr_min = min; p.inr_max = max; p.indicacion = x.t;
-    msg.className = 'msg ok'; msg.textContent = 'Meta guardada.';
+    p.inr_min = min; p.inr_max = max; p.indicacion = indicacion;
+    msg.className = 'msg ok'; msg.textContent = 'Guardado.';
   };
 }
 
+/* ---------- Administrador: riesgo cardiovascular ---------- */
+function riesgoHTML(p) {
+  return `<h2>Riesgo cardiovascular</h2>
+  <div class="panel" style="padding-top:12px">
+    <label for="riesgo">Categoría de riesgo</label>
+    <select id="riesgo"><option value="">Sin definir</option>${RIESGOS.map(x => `<option value="${x}"${x === p.riesgo_cv ? ' selected' : ''}>${x}</option>`).join('')}</select>
+    <p class="nota" style="margin-top:12px">Meta de LDL según ESC/EAS 2019: Bajo, menos de 116 mg/dL. Moderado, menos de 100. Alto, menos de 70. Muy alto, menos de 55. En Alto y Muy alto, además, una reducción de al menos 50% respecto al valor inicial. Tú asignas la categoría; la app no la calcula.</p>
+    <div class="msg" id="msg-riesgo" role="status"></div>
+    <button class="primario" id="guardar-riesgo">Guardar riesgo</button>
+  </div>
+  <details>
+    <summary>Criterios de referencia (ESC/EAS 2019)</summary>
+    <ul>
+      <li><strong>Muy alto:</strong> enfermedad cardiovascular aterosclerótica documentada; diabetes con daño de órgano blanco, 3 o más factores de riesgo mayores o diabetes tipo 1 de más de 20 años; enfermedad renal crónica grave (TFGe menor de 30); SCORE de 10% o más; hipercolesterolemia familiar con enfermedad cardiovascular.</li>
+      <li><strong>Alto:</strong> un solo factor muy elevado (colesterol total mayor de 310 mg/dL, LDL mayor de 190 mg/dL o presión de 180/110 o más); hipercolesterolemia familiar sin otros factores; diabetes de 10 años o más, o con otro factor de riesgo; enfermedad renal crónica moderada (TFGe de 30 a 59); SCORE de 5% a menos de 10%.</li>
+      <li><strong>Moderado:</strong> diabetes en jóvenes (tipo 1 menor de 35 años, tipo 2 menor de 50) con menos de 10 años de evolución y sin otros factores; SCORE de 1% a menos de 5%.</li>
+      <li><strong>Bajo:</strong> SCORE menor de 1%.</li>
+    </ul>
+  </details>`;
+}
+
+function enlazarRiesgo(p) {
+  const msg = document.getElementById('msg-riesgo');
+  document.getElementById('guardar-riesgo').onclick = async () => {
+    const v = document.getElementById('riesgo').value || null;
+    const { error } = await db.from('profiles').update({ riesgo_cv: v }).eq('id', p.id);
+    if (error) { msg.className = 'msg error'; msg.textContent = 'No se pudo guardar: ' + error.message; return; }
+    p.riesgo_cv = v;
+    msg.className = 'msg ok'; msg.textContent = 'Guardado.';
+  };
+}
+
+/* ---------- Administrador: gráficas de laboratorio ---------- */
+function puntosDe(regs, filtro, valor) {
+  return regs.filter(filtro)
+    .map(r => ({ t: r.medido_en, v: Number(valor(r)) }))
+    .filter(q => Number.isFinite(q.v))
+    .sort((a, b) => new Date(a.t) - new Date(b.t))
+    .slice(-30);
+}
+
+function serieGrafica(titulo, unidad, puntos, refs, textoMeta) {
+  if (!puntos.length) return '';
+  refs = refs || [];
+  const ult = puntos[puntos.length - 1];
+  let grafico = '<p class="vacio">Con un segundo resultado aparecerá la gráfica.' + (textoMeta ? ' ' + esc(textoMeta) + '.' : '') + '</p>';
+  if (puntos.length >= 2) {
+    const W = 320, H = 130, m = 28;
+    const vals = puntos.map(q => q.v).concat(refs);
+    let min = Math.min(...vals), max = Math.max(...vals);
+    if (max === min) { max += 1; min -= 1; }
+    const pad = (max - min) * 0.1; min -= pad; max += pad;
+    const x = i => m + i * (W - m * 1.5) / (puntos.length - 1);
+    const y = v => H - m + 4 - (v - min) * (H - m * 1.6) / (max - min);
+    const linea = puntos.map((q, i) => `${x(i).toFixed(1)},${y(q.v).toFixed(1)}`).join(' ');
+    const circulos = puntos.map((q, i) => `<circle cx="${x(i).toFixed(1)}" cy="${y(q.v).toFixed(1)}" r="3" fill="var(--brand)"/>`).join('');
+    const guias = refs.map(v => `<line x1="${m}" x2="${W}" y1="${y(v).toFixed(1)}" y2="${y(v).toFixed(1)}" stroke="var(--alert)" stroke-dasharray="2 4" opacity=".7"/>`).join('');
+    grafico = `<svg viewBox="0 0 ${W} ${H}" role="img" aria-label="Tendencia de ${esc(titulo)}">
+      <text x="2" y="${y(max - pad).toFixed(0)}">${fmt(max - pad)}</text>
+      <text x="2" y="${y(min + pad).toFixed(0)}">${fmt(min + pad)}</text>
+      ${guias}<polyline points="${linea}" fill="none" stroke="var(--brand)" stroke-width="2.5" stroke-linejoin="round"/>${circulos}
+    </svg>
+    <div class="leyenda"><span>${esc(fechaCorta(puntos[0].t))}</span><span>${esc(fechaCorta(ult.t))}</span>${textoMeta ? `<span>${esc(textoMeta)}</span>` : ''}</div>`;
+  }
+  return `<div class="panel" style="padding-top:12px">
+    <strong>${esc(titulo)}</strong>
+    <div style="margin:4px 0 8px">Último: <strong>${fmt(ult.v)} ${esc(unidad)}</strong> <span class="nota">(${esc(fechaCorta(ult.t))})</span></div>
+    ${grafico}
+  </div>`;
+}
+
+function laboratoriosHTML(regs, p) {
+  const bloques = [];
+  if (tieneMeta(p)) {
+    bloques.push(serieGrafica('INR', '', puntosDe(regs, r => r.inr != null, r => r.inr), [Number(p.inr_min), Number(p.inr_max)], 'Meta ' + rangoTexto(p)));
+  }
+  for (const l of LABS) {
+    const meta = l.n === 'LDL' && LDL_META[p.riesgo_cv] != null ? [LDL_META[p.riesgo_cv]] : [];
+    bloques.push(serieGrafica(l.n, l.u, puntosDe(regs, r => r.tipo === 'laboratorio' && r.lab_nombre === l.n, r => r.lab_valor), meta, meta.length ? 'Meta menor de ' + meta[0] : ''));
+  }
+  bloques.push(serieGrafica('Glucometría', 'mg/dL', puntosDe(regs, r => r.tipo === 'glucosa', r => r.glucosa_mgdl), [], ''));
+  const hay = bloques.filter(Boolean);
+  return `<h2>Laboratorio y glucosa</h2>${hay.length ? hay.join('') : '<p class="vacio">Aún no hay resultados de laboratorio ni glucometrías.</p>'}`;
+}
+
+/* ---------- Paciente: guía de cuidados ---------- */
 function guiaHTML(p) {
+  p = p || {};
+  const g = grupoAnticoag(p);
+  const anti = g === 'vka' || g === 'doac';
+  const li = lista => lista.filter(Boolean).map(x => `<li>${x}</li>`).join('');
+
+  const urgente = li([
+    anti && 'Sangrado que no se detiene después de 10 minutos de presión firme.',
+    anti && 'Vómito con sangre o con aspecto de café molido; heces negras o con sangre; orina roja o color café.',
+    anti && 'Tos con sangre, o sangrado de nariz o encías que no cede.',
+    anti && 'Dolor de cabeza muy intenso y repentino, o un golpe fuerte en la cabeza aunque se sienta bien.',
+    'Cara caída, debilidad o adormecimiento de un brazo o pierna (sobre todo de un solo lado), dificultad para hablar o entender, pérdida súbita de la visión o mareo con pérdida del equilibrio. Puede ser una embolia o un derrame cerebral.',
+    'Dolor de pecho, falta de aire intensa o desmayo.',
+    'Pierna o brazo hinchado, caliente y doloroso.',
+    'Palpitaciones que no se quitan, con mareo, falta de aire o desmayo.',
+    g === 'vka' && 'Si tiene una válvula mecánica: que deje de oír el clic habitual o que cambie de forma notable. Acuda ese mismo día.'
+  ]);
+
+  const avisar = li([
+    anti && 'Moretones grandes sin causa o sangrado leve que se repite (encías, nariz).',
+    anti && 'Menstruación más abundante de lo normal.',
+    'Aumento de peso de más de 2 kg en 3 días, hinchazón de piernas o más falta de aire de lo habitual.',
+    'Diarrea o vómito de más de un día, o fiebre que no se quita.',
+    anti && 'Olvido de varias dosis, o un medicamento nuevo.'
+  ]);
+
   const meta = tieneMeta(p)
     ? `<p>Su meta de INR, indicada por su médico, es de <strong>${rangoTexto(p)}</strong>.</p>`
     : '<p>Su médico todavía no ha registrado su meta de INR en la aplicación. Pregúntele cuál es.</p>';
-  return `
-  <p class="nota" style="margin-top:16px">Información general para pacientes que toman anticoagulante. No sustituye las indicaciones de su cardiólogo: si algo de aquí es distinto a lo que él le indicó, siga lo que él le indicó.</p>
 
-  <details class="urgente" open>
-    <summary>Signos de alarma</summary>
-    <h3>Llame a emergencias o acuda de inmediato si tiene:</h3>
-    <ul>
-      <li>Sangrado que no se detiene después de 10 minutos de presión firme.</li>
-      <li>Vómito con sangre o con aspecto de café molido; heces negras o con sangre; orina roja o color café.</li>
-      <li>Tos con sangre, o sangrado de nariz o encías que no cede.</li>
-      <li>Dolor de cabeza muy intenso y repentino, o un golpe fuerte en la cabeza aunque se sienta bien.</li>
-      <li>Cara caída, debilidad o adormecimiento de un brazo o pierna (sobre todo de un solo lado), dificultad para hablar o entender, pérdida súbita de la visión o mareo con pérdida del equilibrio. Puede ser una embolia o un derrame cerebral.</li>
-      <li>Dolor de pecho, falta de aire intensa o desmayo.</li>
-      <li>Pierna o brazo hinchado, caliente y doloroso.</li>
-      <li>Palpitaciones que no se quitan, con mareo, falta de aire o desmayo.</li>
-      <li>Si tiene una válvula mecánica: que deje de oír el clic habitual o que cambie de forma notable. Acuda ese mismo día.</li>
-    </ul>
-    <h3>Avise a su médico en las próximas 24 horas si tiene:</h3>
-    <ul>
-      <li>Moretones grandes sin causa o sangrado leve que se repite (encías, nariz).</li>
-      <li>Menstruación más abundante de lo normal.</li>
-      <li>Diarrea o vómito de más de un día, o fiebre que no se quita.</li>
-      <li>Olvido de varias dosis, o un medicamento nuevo.</li>
-    </ul>
-  </details>
-
+  const seccionINR = g === 'vka' ? `
   <details open>
     <summary>Mi meta de INR y mis controles</summary>
     ${meta}
@@ -272,36 +401,72 @@ function guiaHTML(p) {
       <li>Puede medirse en laboratorio (sangre de la vena) o con un coagulómetro portátil (una gota de sangre del dedo). Pregunte a su médico cuál le conviene y cada cuándo.</li>
       <li>Anote cada resultado en esta aplicación, en «Laboratorio e INR», con fecha y hora.</li>
       <li>Lleve siempre una tarjeta o una foto con el nombre de su anticoagulante, la dosis, su meta de INR y el teléfono de su médico.</li>
-      <li>Si toma un anticoagulante directo (apixabán, rivaroxabán, dabigatrán o edoxabán), no necesita medirse el INR.</li>
     </ul>
-  </details>
+  </details>` : '';
 
+  const seccionDOAC = g === 'doac' ? `
+  <details open>
+    <summary>Mi anticoagulante</summary>
+    <ul>
+      <li>Su anticoagulante es de acción directa. No necesita medirse el INR.</li>
+      <li>Tómelo a las mismas horas todos los días, como se lo indicó su médico. No se salte dosis: su efecto dura pocas horas.</li>
+      <li>Algunos se toman con alimentos; siga la indicación de su receta.</li>
+      <li>Su médico le pedirá estudios de sangre periódicos (función del riñón y hemoglobina). Puede anotar los resultados en «Laboratorio».</li>
+      <li>No suspenda ni cambie la dosis por su cuenta, ni antes de un procedimiento sin que su cardiólogo se lo indique.</li>
+      <li>Lleve siempre una tarjeta o una foto con el nombre de su anticoagulante, la dosis y el teléfono de su médico.</li>
+    </ul>
+  </details>` : '';
+
+  const aviso = g === 'sin'
+    ? '<p class="nota" style="margin-top:12px">Su médico todavía no ha registrado su tratamiento en la aplicación. Cuando lo haga, verá aquí la información que le corresponde.</p>'
+    : '';
+
+  const cuidados = li([
+    anti && 'Tome su anticoagulante a la misma hora todos los días. No cambie la dosis ni lo suspenda por su cuenta.',
+    g === 'vka' && 'Si olvida una dosis, tómela el mismo día en cuanto lo recuerde. Si ya es el día siguiente, no la duplique y avise a su médico.',
+    g === 'doac' && 'Si olvida una dosis, siga la indicación que le dio su médico o su farmacéutico. En general, no se toma doble dosis para compensar.',
+    anti && 'No tome aspirina, ibuprofeno, naproxeno, diclofenaco ni otros antiinflamatorios, a menos que su cardiólogo lo indique.',
+    anti && 'Pregunte antes de tomar cualquier medicamento para el dolor.' + (g === 'vka' ? ' El paracetamol suele preferirse, pero en dosis altas o diarias también puede subir el INR.' : ''),
+    anti && 'Antes de tomar un medicamento nuevo, antibiótico, suplemento, producto naturista o té medicinal, consulte a su médico o farmacéutico. Pueden cambiar el efecto del anticoagulante.',
+    'Tome sus demás medicamentos del corazón como se los indicó su cardiólogo y no los suspenda por su cuenta.',
+    'Evite el alcohol o limítelo al mínimo.',
+    anti && 'Evite deportes de contacto, use casco en bicicleta o moto y cuide no caerse. Use cepillo dental suave y rastrillo eléctrico.',
+    anti && 'Avise que toma anticoagulante a todo dentista, cirujano o servicio de urgencias. No suspenda el anticoagulante antes de un procedimiento sin que su cardiólogo se lo indique.',
+    anti && 'Si tiene una prótesis valvular, pregunte a su cardiólogo si necesita antibiótico antes de procedimientos dentales y mantenga buena higiene bucal.',
+    anti && 'Si es mujer en edad fértil: los anticoagulantes pueden dañar al bebé. Avise de inmediato a su médico si planea embarazarse o cree estarlo.',
+    'Acuda a sus consultas y estudios de laboratorio en las fechas indicadas.'
+  ]);
+
+  const alimentacion = li([
+    g === 'vka' && 'No necesita dejar las verduras. Lo importante es comer cantidades parecidas de alimentos ricos en vitamina K cada semana, porque la vitamina K contrarresta a la warfarina.',
+    g === 'vka' && 'Ricos en vitamina K: espinaca, acelga, quelites, col, brócoli, coles de Bruselas, lechuga verde, perejil y cilantro.',
+    g === 'vka' && 'Evite cambios bruscos: no empiece de repente licuados verdes diarios, dietas de moda ni ayunos prolongados. Si va a cambiar su forma de comer, avise para vigilar el INR.',
+    g === 'vka' && 'Consulte a su médico antes de consumir con frecuencia grandes cantidades de jugo de arándano, toronja, mango, té verde, suplementos o vitaminas (en especial con vitamina K).',
+    g === 'doac' && 'No necesita evitar verduras ni cambiar su alimentación por este anticoagulante.',
+    'Reduzca la sal y los alimentos ultraprocesados, sobre todo si tiene insuficiencia cardiaca o presión alta.',
+    g === 'vka' && 'Si tiene diarrea, vómito o come mucho menos de lo habitual por más de un día, avise: puede subir el INR.',
+    g === 'doac' && 'Si tiene diarrea, vómito o se deshidrata por más de un día, avise: puede afectar al riñón y el efecto del medicamento.'
+  ]);
+
+  return `
+  <p class="nota" style="margin-top:16px">Información general para su cuidado. No sustituye las indicaciones de su cardiólogo: si algo de aquí es distinto a lo que él le indicó, siga lo que él le indicó.</p>${aviso}
+
+  <details class="urgente" open>
+    <summary>Signos de alarma</summary>
+    <h3>Llame a emergencias o acuda de inmediato si tiene:</h3>
+    <ul>${urgente}</ul>
+    <h3>Avise a su médico en las próximas 24 horas si tiene:</h3>
+    <ul>${avisar}</ul>
+  </details>
+  ${seccionINR}${seccionDOAC}
   <details>
     <summary>Cuidados diarios</summary>
-    <ul>
-      <li>Tome su anticoagulante a la misma hora todos los días. No cambie la dosis por su cuenta.</li>
-      <li>Si olvida una dosis, tómela el mismo día en cuanto lo recuerde. Si ya es el día siguiente, no la duplique y avise a su médico.</li>
-      <li>No tome aspirina, ibuprofeno, naproxeno, diclofenaco ni otros antiinflamatorios, a menos que su cardiólogo lo indique.</li>
-      <li>Pregunte antes de tomar cualquier medicamento para el dolor. El paracetamol suele preferirse, pero en dosis altas o diarias también puede subir el INR.</li>
-      <li>Antes de tomar un medicamento nuevo, antibiótico, suplemento, producto naturista o té medicinal, consulte a su médico o farmacéutico. Muchos cambian el INR.</li>
-      <li>Evite el alcohol o limítelo al mínimo.</li>
-      <li>Evite deportes de contacto, use casco en bicicleta o moto y cuide no caerse. Use cepillo dental suave y rastrillo eléctrico.</li>
-      <li>Avise que toma anticoagulante a todo dentista, cirujano o servicio de urgencias. No suspenda el anticoagulante antes de un procedimiento sin que su cardiólogo se lo indique.</li>
-      <li>Si tiene una prótesis valvular, pregunte a su cardiólogo si necesita antibiótico antes de procedimientos dentales y mantenga buena higiene bucal.</li>
-      <li>Si es mujer en edad fértil: la warfarina puede dañar al bebé. Avise de inmediato a su médico si planea embarazarse o cree estarlo.</li>
-    </ul>
+    <ul>${cuidados}</ul>
   </details>
 
   <details>
     <summary>Alimentación</summary>
-    <ul>
-      <li>No necesita dejar las verduras. Lo importante es comer cantidades parecidas de alimentos ricos en vitamina K cada semana, porque la vitamina K contrarresta a la warfarina.</li>
-      <li>Ricos en vitamina K: espinaca, acelga, quelites, col, brócoli, coles de Bruselas, lechuga verde, perejil y cilantro.</li>
-      <li>Evite cambios bruscos: no empiece de repente licuados verdes diarios, dietas de moda ni ayunos prolongados. Si va a cambiar su forma de comer, avise para vigilar el INR.</li>
-      <li>Consulte a su médico antes de consumir con frecuencia grandes cantidades de jugo de arándano, toronja, mango, té verde, suplementos o vitaminas (en especial con vitamina K).</li>
-      <li>Reduzca la sal y los alimentos ultraprocesados, sobre todo si tiene insuficiencia cardiaca o presión alta.</li>
-      <li>Si tiene diarrea, vómito o come mucho menos de lo habitual por más de un día, avise: puede subir el INR.</li>
-    </ul>
+    <ul>${alimentacion}</ul>
   </details>`;
 }
 
@@ -309,7 +474,7 @@ function guiaHTML(p) {
 function vistaAcceso(modo = 'entrar', error = '') {
   const reg = modo === 'registro';
   app.innerHTML = `
-    <div class="top"><div class="marca"><img class="logo" src="icon-192.png" alt=""><h1>CardioControl Mante</h1></div></div>
+    <div class="top"><div class="marca"><img class="logo" src="icon-192.png" alt=""><div><h1>CardioControl Mante</h1><div class="quien">${esc(MEDICO.nombre)}<br>${esc(MEDICO.especialidad)}</div></div></div></div>
     <div class="panel">
       <form id="f-acceso" novalidate>
         ${reg ? `<label for="nombre">Nombre completo</label><input id="nombre" autocomplete="name" required>` : ''}
@@ -384,11 +549,11 @@ async function vistaPaciente() {
     ${pestanas}
     <h2 style="margin-top:20px">¿Qué quieres anotar?</h2>
     <div class="tipos" role="group" aria-label="Tipo de registro">
-      ${Object.entries(TIPOS).map(([k, v]) => `<button data-tipo="${k}" aria-pressed="${k === state.tipo}">${v.t}</button>`).join('')}
+      ${Object.entries(TIPOS).map(([k, v]) => `<button data-tipo="${k}" aria-pressed="${k === state.tipo}">${k === 'laboratorio' && !tieneMeta(state.perfil) ? 'Laboratorio' : v.t}</button>`).join('')}
     </div>
     <form id="f-reg" class="panel" novalidate>
       ${state.tipo === 'laboratorio' ? metaPacienteHTML(state.perfil) : ''}
-      ${tipo.campos.map(campo).join('')}
+      ${camposActivos().map(campo).join('')}
       <label for="medido_en">Fecha y hora${state.tipo === 'palpitaciones' ? ' en que empezaron' : ''}</label>
       <input id="medido_en" type="datetime-local" value="${ahoraLocal()}">
       <label for="notas">Notas (opcional)</label>
@@ -403,6 +568,12 @@ async function vistaPaciente() {
   document.getElementById('salir').onclick = salir;
   document.querySelectorAll('[data-tipo]').forEach(b => b.onclick = () => { state.tipo = b.dataset.tipo; vistaPaciente(); });
   document.getElementById('f-reg').onsubmit = guardarRegistro;
+  const selLab = document.getElementById('lab_nombre');
+  if (selLab) selLab.onchange = () => {
+    const l = LABS.find(x => x.n === selLab.value);
+    const u = document.getElementById('lab_unidad');
+    if (u && l) u.value = l.u;
+  };
   enlazarPestanas();
 }
 
@@ -411,11 +582,21 @@ async function guardarRegistro(e) {
   const msg = document.getElementById('msg');
   const fila = { paciente_id: state.user.id, tipo: state.tipo };
   let hayDato = false;
-  for (const [id, , tipoInput] of TIPOS[state.tipo].campos) {
+  for (const [id, , tipoInput] of camposActivos()) {
     const v = document.getElementById(id).value.trim();
     if (v === '') continue;
     fila[id] = tipoInput === 'number' ? Number(v) : v;
     if (tipoInput === 'number') hayDato = true;
+  }
+  if (state.tipo === 'laboratorio') {
+    if (fila.lab_nombre === 'Otro') {
+      if (!fila.lab_otro) { msg.className = 'msg error'; msg.textContent = 'Escribe el nombre del estudio.'; return; }
+      fila.lab_nombre = fila.lab_otro;
+    }
+    delete fila.lab_otro;
+    if (fila.lab_valor != null && !fila.lab_nombre) { msg.className = 'msg error'; msg.textContent = 'Elige el estudio de laboratorio.'; return; }
+    if (fila.lab_nombre && fila.lab_valor == null) { msg.className = 'msg error'; msg.textContent = 'Escribe el resultado del estudio.'; return; }
+    if (fila.lab_nombre && !fila.lab_unidad) { const l = LABS.find(x => x.n === fila.lab_nombre); if (l) fila.lab_unidad = l.u; }
   }
   if (!hayDato) { msg.className = 'msg error'; msg.textContent = 'Escribe al menos un valor antes de guardar.'; return; }
   const cuando = document.getElementById('medido_en').value;
@@ -469,6 +650,7 @@ function pintarAdmin() {
         <div class="n">${esc(p.nombre || 'Sin nombre')}</div>
         <div class="d">${regs.length ? 'Último registro: ' + esc(fecha(regs[0].medido_en)) : 'Sin registros'}</div>
         <div class="d">${metaTextoAdmin(p)}</div>
+        ${p.riesgo_cv ? `<div class="d">Riesgo cardiovascular: ${esc(p.riesgo_cv)}</div>` : ''}
         ${nAl ? `<div class="aviso">${nAl} registro(s) fuera de rango en 7 días</div>` : ''}
       </button></li>`).join('')}</ul>` : '<p class="vacio">Aún no hay pacientes registrados. Comparte el enlace de la app para que creen su cuenta.</p>'}`;
   document.getElementById('salir').onclick = salir;
@@ -504,12 +686,15 @@ function pintarPaciente() {
     <button id="volver" class="enlace" style="padding-left:0">Volver a pacientes</button>
     <h2 style="margin-top:4px">${esc(p.nombre || 'Sin nombre')}</h2>
     <div class="panel" style="padding-top:16px">${grafica(regs)}</div>
+    ${riesgoHTML(p)}
     ${anticoagulacionHTML(p)}
+    ${laboratoriosHTML(regs, p)}
     <h2>Historial</h2>
     ${regs.length ? `<ul class="lista">${regs.slice(0, 100).map(r => itemHTML(r, p, true)).join('')}</ul>` : '<p class="vacio">Sin registros.</p>'}`;
   document.getElementById('salir').onclick = salir;
   document.getElementById('volver').onclick = () => { state.sel = null; pintarAdmin(); };
   enlazarAnticoagulacion(p);
+  enlazarRiesgo(p);
 }
 
 /* ================== COMPARTIR E INSTALAR ================== */
