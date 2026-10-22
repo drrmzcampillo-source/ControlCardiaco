@@ -97,7 +97,7 @@ const SUPABASE_URL = 'https://weifxnszhirnmsxsfago.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_Zb-xmUeyX1BB6aVBxCAT2w_5-5xMyJO';
 
 /* Datos del médico y del consultorio que ven los pacientes. Cámbialos aquí si quieres. */
-const MEDICO = { nombre: 'Dr. Rodolfo Ramírez Campillo', especialidad: 'Cardiología', consultorio: 'Consultorio Cardiología Mante', telefono: '831 241 7049', nota: 'Previa cita' };
+const MEDICO = { nombre: 'Dr. Rodolfo Ramírez Campillo', especialidad: 'Cardiología', consultorio: 'Consultorio Cardiología Mante', telefono: '831 241 7049', nota: 'Previa cita', facebook: 'https://www.facebook.com/share/1Em4gNfdyU/' };
 
 /* Número de emergencias y detector sencillo de síntomas de alarma en las notas del paciente. */
 const URGENCIAS = { numero: '911' };
@@ -140,10 +140,13 @@ const TIPOS = {
     ['lab_valor','Resultado','number','any'],['lab_unidad','Unidad','text'] ] }
 };
 
-function resumen(r) {
+function resumen(r, tallaRef) {
   switch (r.tipo) {
     case 'presion': return `${r.sistolica ?? '—'}/${r.diastolica ?? '—'} mmHg, pulso ${r.pulso ?? '—'}`;
-    case 'peso': return [r.peso_kg != null ? r.peso_kg + ' kg' : null, r.talla_cm != null ? r.talla_cm + ' cm' : null].filter(Boolean).join(', ');
+    case 'peso': {
+      const v = r.peso_kg != null ? imc(r.peso_kg, r.talla_cm != null ? r.talla_cm : tallaRef) : null;
+      return [r.peso_kg != null ? r.peso_kg + ' kg' : null, r.talla_cm != null ? r.talla_cm + ' cm' : null, v != null ? 'IMC ' + v.toFixed(1) : null].filter(Boolean).join(', ');
+    }
     case 'palpitaciones': return `Palpitaciones: ${r.palp_duracion_min ?? '—'} min, ${r.palp_episodios ?? '—'} episodio(s)` + (r.pulso != null ? `, pulso ${r.pulso}` : '');
     case 'glucosa': return `Glucosa ${r.glucosa_mgdl} mg/dL (${({ayuno:'en ayunas',antes_comida:'antes de comer',despues_comida:'después de comer',otro:'otro momento'})[r.glucosa_momento] || '—'})`;
     case 'laboratorio': return [r.inr != null ? 'INR ' + r.inr : null, r.lab_nombre ? `${r.lab_nombre} ${r.lab_valor ?? ''} ${r.lab_unidad ?? ''}`.trim() : null].filter(Boolean).join(', ');
@@ -173,7 +176,8 @@ function alertas(r, p) {
 const consultorioHTML = () => `<div class="consultorio">
   <strong>${esc(MEDICO.nombre)}</strong>, ${esc(MEDICO.especialidad)}<br>
   ${esc(MEDICO.consultorio)}<br>
-  Tel. <a href="tel:${MEDICO.telefono.replace(/\D/g, '')}">${esc(MEDICO.telefono)}</a>, ${esc(MEDICO.nota.toLowerCase())}
+  Tel. <a href="tel:${MEDICO.telefono.replace(/\D/g, '')}">${esc(MEDICO.telefono)}</a>, ${esc(MEDICO.nota.toLowerCase())}<br>
+  <a href="${MEDICO.facebook}" target="_blank" rel="noopener">Nuestro Facebook</a>
 </div>`;
 
 const urgenciaHTML = () => `<div class="urgencia" role="note">
@@ -182,11 +186,11 @@ const urgenciaHTML = () => `<div class="urgencia" role="note">
   <p class="nota" style="margin:10px 0 0">Esta aplicación no se revisa en tiempo real.</p>
 </div>`;
 
-function itemHTML(r, p, verAlertas) {
+function itemHTML(r, p, verAlertas, tallaRef) {
   const al = verAlertas ? alertas(r, p) : [];
   return `<li class="item${al.length ? ' alerta' : ''}">
     <div class="cuando">${esc(fecha(r.medido_en))}</div>
-    <div class="que">${esc(resumen(r))}</div>
+    <div class="que">${esc(resumen(r, tallaRef))}</div>
     ${r.notas ? `<div>${esc(r.notas)}</div>` : ''}
     ${al.length ? `<div class="aviso">Alerta: ${esc(al.join(', '))}</div>` : ''}
   </li>`;
@@ -228,6 +232,39 @@ const tieneMeta = p => p && p.inr_min != null && p.inr_max != null;
 const rangoTexto = p => Number(p.inr_min).toFixed(1) + ' a ' + Number(p.inr_max).toFixed(1);
 const fmt = v => String(Math.round(v * 100) / 100);
 const fechaCorta = iso => new Date(iso).toLocaleDateString('es', { day: 'numeric', month: 'short', year: '2-digit' });
+
+/* Índice de masa corporal (kg/m²). Devuelve null si los datos no son plausibles. */
+function imc(peso, tallaCm) {
+  const kg = Number(peso), cm = Number(tallaCm);
+  if (!(kg >= 20 && kg <= 400 && cm >= 100 && cm <= 230)) return null;
+  const m = cm / 100;
+  return kg / (m * m);
+}
+function categoriaIMC(v) {
+  if (v < 18.5) return 'Bajo peso';
+  if (v < 25) return 'Peso normal';
+  if (v < 30) return 'Sobrepeso';
+  if (v < 35) return 'Obesidad grado I';
+  if (v < 40) return 'Obesidad grado II';
+  return 'Obesidad grado III';
+}
+/* Talla más reciente registrada (la lista viene ordenada de la más nueva a la más antigua). */
+function ultimaTalla(regs) {
+  const r = (regs || []).find(x => x.talla_cm != null);
+  return r ? Number(r.talla_cm) : null;
+}
+/* Serie de IMC en el tiempo: usa la talla del propio registro o la última talla conocida hasta ese momento. */
+function puntosIMC(regs) {
+  const orden = (regs || []).filter(r => r.tipo === 'peso').slice().sort((a, b) => new Date(a.medido_en) - new Date(b.medido_en));
+  let talla = null;
+  const pts = [];
+  for (const r of orden) {
+    if (r.talla_cm != null) talla = Number(r.talla_cm);
+    const v = r.peso_kg != null ? imc(r.peso_kg, talla) : null;
+    if (v != null) pts.push({ t: r.medido_en, v });
+  }
+  return pts.slice(-30);
+}
 
 function grupoAnticoag(p) {
   p = p || {};
@@ -378,9 +415,12 @@ function laboratoriosHTML(regs, p) {
     const meta = l.n === 'LDL' && LDL_META[p.riesgo_cv] != null ? [LDL_META[p.riesgo_cv]] : [];
     bloques.push(serieGrafica(l.n, l.u, puntosDe(regs, r => r.tipo === 'laboratorio' && r.lab_nombre === l.n, r => r.lab_valor), meta, meta.length ? 'Meta menor de ' + meta[0] : ''));
   }
+  bloques.push(serieGrafica('Peso', 'kg', puntosDe(regs, r => r.tipo === 'peso' && r.peso_kg != null, r => r.peso_kg), [], ''));
+  const ptsIMC = puntosIMC(regs);
+  bloques.push(serieGrafica('IMC', 'kg/m²', ptsIMC, [], ptsIMC.length ? 'Categoría: ' + categoriaIMC(ptsIMC[ptsIMC.length - 1].v) : ''));
   bloques.push(serieGrafica('Glucometría', 'mg/dL', puntosDe(regs, r => r.tipo === 'glucosa', r => r.glucosa_mgdl), [], ''));
   const hay = bloques.filter(Boolean);
-  return `<h2>Laboratorio y glucosa</h2>${hay.length ? hay.join('') : '<p class="vacio">Aún no hay resultados de laboratorio ni glucometrías.</p>'}`;
+  return `<h2>Peso, laboratorio y glucosa</h2>${hay.length ? hay.join('') : '<p class="vacio">Aún no hay peso, laboratorio ni glucometrías registrados.</p>'}`;
 }
 
 /* ---------- Paciente: guía de cuidados ---------- */
@@ -550,6 +590,7 @@ async function vistaPaciente() {
   const { data, error } = await db.from('registros').select('*')
     .eq('paciente_id', state.user.id).order('medido_en', { ascending: false }).limit(40);
   state.regs = error ? [] : data;
+  const tallaPrevia = ultimaTalla(state.regs);
   const tipo = TIPOS[state.tipo];
 
   const campo = ([id, etiqueta, tipoInput, extra]) => {
@@ -583,6 +624,7 @@ async function vistaPaciente() {
     <form id="f-reg" class="panel" novalidate>
       ${state.tipo === 'laboratorio' ? metaPacienteHTML(state.perfil) : ''}
       ${camposActivos().map(campo).join('')}
+      ${state.tipo === 'peso' ? '<p id="imc-vivo" class="vacio" aria-live="polite" style="margin:12px 0 0"></p>' : ''}
       <label for="medido_en">Fecha y hora${state.tipo === 'palpitaciones' ? ' en que empezaron' : ''}</label>
       <input id="medido_en" type="datetime-local" value="${ahoraLocal()}">
       <label for="notas">Notas (opcional)</label>
@@ -592,12 +634,26 @@ async function vistaPaciente() {
       <button class="primario" type="submit">Guardar registro</button>
     </form>
     <h2>Mis últimos registros</h2>
-    ${state.regs.length ? `<ul class="lista">${state.regs.map(r => itemHTML(r)).join('')}</ul>` : '<p class="vacio">Todavía no has guardado ningún registro.</p>'}
+    ${state.regs.length ? `<ul class="lista">${state.regs.map(r => itemHTML(r, null, false, tallaPrevia)).join('')}</ul>` : '<p class="vacio">Todavía no has guardado ningún registro.</p>'}
     <p class="vacio" style="margin-top:24px">Si tiene dolor en el pecho, falta de aire intensa o desmayo, no use esta aplicación: llame a emergencias.</p>`;
 
   document.getElementById('salir').onclick = salir;
   document.querySelectorAll('[data-tipo]').forEach(b => b.onclick = () => { state.tipo = b.dataset.tipo; vistaPaciente(); });
   document.getElementById('f-reg').onsubmit = guardarRegistro;
+  if (state.tipo === 'peso') {
+    const iPeso = document.getElementById('peso_kg');
+    const iTalla = document.getElementById('talla_cm');
+    const salida = document.getElementById('imc-vivo');
+    const calcular = () => {
+      const usaPrevia = iTalla.value === '';
+      const v = imc(parseFloat(iPeso.value), usaPrevia ? tallaPrevia : parseFloat(iTalla.value));
+      if (v != null) salida.textContent = 'Su IMC: ' + v.toFixed(1) + ' kg/m²' + (usaPrevia ? ' (con su última talla registrada)' : '');
+      else salida.textContent = (usaPrevia && tallaPrevia == null) ? 'Escriba su peso y su talla para calcular el IMC.' : '';
+    };
+    iPeso.oninput = calcular;
+    iTalla.oninput = calcular;
+    calcular();
+  }
   const selLab = document.getElementById('lab_nombre');
   if (selLab) selLab.onchange = () => {
     const l = LABS.find(x => x.n === selLab.value);
@@ -713,6 +769,7 @@ function pintarPaciente() {
   const p = state.pacientes.find(x => x.id === state.sel);
   if (!p) { state.sel = null; return pintarAdmin(); }
   const regs = state.regs.filter(x => x.paciente_id === p.id);
+  const tallaRef = ultimaTalla(regs);
   app.innerHTML = `
     ${encabezado('Administrador')}
     <button id="volver" class="enlace" style="padding-left:0">Volver a pacientes</button>
@@ -722,7 +779,7 @@ function pintarPaciente() {
     ${anticoagulacionHTML(p)}
     ${laboratoriosHTML(regs, p)}
     <h2>Historial</h2>
-    ${regs.length ? `<ul class="lista">${regs.slice(0, 100).map(r => itemHTML(r, p, true)).join('')}</ul>` : '<p class="vacio">Sin registros.</p>'}`;
+    ${regs.length ? `<ul class="lista">${regs.slice(0, 100).map(r => itemHTML(r, p, true, tallaRef)).join('')}</ul>` : '<p class="vacio">Sin registros.</p>'}`;
   document.getElementById('salir').onclick = salir;
   document.getElementById('volver').onclick = () => { state.sel = null; pintarAdmin(); };
   enlazarAnticoagulacion(p);
@@ -738,7 +795,8 @@ function enlaceWhatsApp() {
     
     'Después puede instalarla en su celular para abrirla con un toque.' +
     '\n\nIMPORTANTE: ni esta aplicación ni este chat se revisan en tiempo real. Si tiene dolor de pecho, falta de aire, desmayo o alteración de la conciencia, palpitaciones intensas o malestar general importante, llame al ' + URGENCIAS.numero + ' o acuda a urgencias.' +
-    '\n\nConsultas no urgentes: Tel. ' + MEDICO.telefono + ', ' + MEDICO.nota.toLowerCase() + '.';
+    '\n\nConsultas no urgentes: Tel. ' + MEDICO.telefono + ', ' + MEDICO.nota.toLowerCase() + '.' +
+    '\nFacebook: ' + MEDICO.facebook;
   return 'https://wa.me/?text=' + encodeURIComponent(texto);
 }
 
