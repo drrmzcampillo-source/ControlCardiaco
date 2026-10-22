@@ -64,6 +64,12 @@ textarea{min-height:80px}
 svg{width:100%;height:auto;display:block}
 svg text{fill:var(--muted);font-size:10px}
 .leyenda{display:flex;gap:16px;font-size:.9rem;color:var(--muted);margin-top:4px}
+.consultorio{color:var(--muted);font-size:.95rem;margin:0 0 4px}
+.consultorio strong{color:var(--ink)}
+.consultorio a{color:var(--brand);font-weight:700}
+.urgencia{border:1px solid var(--alert);border-left:6px solid var(--alert);background:var(--alert-bg);border-radius:12px;padding:12px 16px;margin:12px 0}
+.urgencia p{margin:0 0 10px}
+a.btn-911{display:flex;align-items:center;justify-content:center;min-height:48px;border-radius:10px;background:var(--alert);color:var(--paper);font-weight:700;text-decoration:none}
 details{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:4px 16px;margin-top:12px}
 details.urgente{border-left:6px solid var(--alert)}
 summary{font-weight:700;min-height:48px;display:flex;align-items:center;cursor:pointer}
@@ -90,8 +96,13 @@ a.btn-wa{display:flex;align-items:center;justify-content:center;min-height:48px;
 const SUPABASE_URL = 'https://weifxnszhirnmsxsfago.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_Zb-xmUeyX1BB6aVBxCAT2w_5-5xMyJO';
 
-/* Nombre y especialidad que aparecen en la pantalla de acceso. Cámbialos aquí si quieres. */
-const MEDICO = { nombre: 'Dr. Rodolfo Ramírez Campillo', especialidad: 'Cardiología' };
+/* Datos del médico y del consultorio que ven los pacientes. Cámbialos aquí si quieres. */
+const MEDICO = { nombre: 'Dr. Rodolfo Ramírez Campillo', especialidad: 'Cardiología', consultorio: 'Consultorio Cardiología Mante', telefono: '831 241 7049', nota: 'Previa cita' };
+
+/* Número de emergencias y detector sencillo de síntomas de alarma en las notas del paciente. */
+const URGENCIAS = { numero: '911' };
+const sinAcentos = s => String(s).normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+const SINTOMAS_RE = /(dolor|duele|duelen|molestia|presion|opresion)[^.]{0,25}pecho|dolor toracico|opresion|falta(n)? (el |de )?aire|ahogo|no puedo respirar|dificultad para respirar|desmay|sincope|perdi el conocimiento|perdida de (la )?conciencia|marea|mareo|palpitacion|taquicardia|sudor frio|confus|desorient|sangrad|sangre|hemorrag/i;
 
 /* Umbrales de alerta para el panel del administrador.
    Ajústalos a tu criterio clínico: [mínimo, máximo]. */
@@ -152,11 +163,24 @@ function alertas(r, p) {
     else if (!(p && p.indicacion)) fuera(r.inr, LIM.inr, 'INR');
   }
   if (r.palp_duracion_min != null && r.palp_duracion_min >= LIM.palpitacionesMin) a.push(`Palpitaciones de ${r.palp_duracion_min} min`);
+  if (r.notas && SINTOMAS_RE.test(sinAcentos(r.notas))) a.push('Notas con posible síntoma de alarma');
   if (r.tipo === 'laboratorio' && r.lab_nombre === 'LDL' && r.lab_valor != null && p && LDL_META[p.riesgo_cv] != null && Number(r.lab_valor) >= LDL_META[p.riesgo_cv]) {
     a.push(`LDL ${r.lab_valor} (meta menor de ${LDL_META[p.riesgo_cv]})`);
   }
   return a;
 }
+
+const consultorioHTML = () => `<div class="consultorio">
+  <strong>${esc(MEDICO.nombre)}</strong>, ${esc(MEDICO.especialidad)}<br>
+  ${esc(MEDICO.consultorio)}<br>
+  Tel. <a href="tel:${MEDICO.telefono.replace(/\D/g, '')}">${esc(MEDICO.telefono)}</a>, ${esc(MEDICO.nota.toLowerCase())}
+</div>`;
+
+const urgenciaHTML = () => `<div class="urgencia" role="note">
+  <p><strong>¿Es una urgencia?</strong> Dolor de pecho, falta de aire, desmayo o alteración de la conciencia, palpitaciones intensas o malestar general importante: no espere respuesta por aquí. Llame al ${URGENCIAS.numero} o acuda a urgencias.</p>
+  <a class="btn-911" href="tel:${URGENCIAS.numero}">Llamar al ${URGENCIAS.numero}</a>
+  <p class="nota" style="margin:10px 0 0">Esta aplicación no se revisa en tiempo real.</p>
+</div>`;
 
 function itemHTML(r, p, verAlertas) {
   const al = verAlertas ? alertas(r, p) : [];
@@ -164,7 +188,7 @@ function itemHTML(r, p, verAlertas) {
     <div class="cuando">${esc(fecha(r.medido_en))}</div>
     <div class="que">${esc(resumen(r))}</div>
     ${r.notas ? `<div>${esc(r.notas)}</div>` : ''}
-    ${al.length ? `<div class="aviso">Fuera de rango: ${esc(al.join(', '))}</div>` : ''}
+    ${al.length ? `<div class="aviso">Alerta: ${esc(al.join(', '))}</div>` : ''}
   </li>`;
 }
 
@@ -375,6 +399,7 @@ function guiaHTML(p) {
     'Dolor de pecho, falta de aire intensa o desmayo.',
     'Pierna o brazo hinchado, caliente y doloroso.',
     'Palpitaciones que no se quitan, con mareo, falta de aire o desmayo.',
+    'Confusión, desorientación, mucho sueño o dificultad para despertar, o malestar general importante.',
     g === 'vka' && 'Si tiene una válvula mecánica: que deje de oír el clic habitual o que cambie de forma notable. Acuda ese mismo día.'
   ]);
 
@@ -453,7 +478,7 @@ function guiaHTML(p) {
 
   <details class="urgente" open>
     <summary>Signos de alarma</summary>
-    <h3>Llame a emergencias o acuda de inmediato si tiene:</h3>
+    <h3>Llame al ${URGENCIAS.numero} o acuda de inmediato a urgencias si tiene:</h3>
     <ul>${urgente}</ul>
     <h3>Avise a su médico en las próximas 24 horas si tiene:</h3>
     <ul>${avisar}</ul>
@@ -474,7 +499,8 @@ function guiaHTML(p) {
 function vistaAcceso(modo = 'entrar', error = '') {
   const reg = modo === 'registro';
   app.innerHTML = `
-    <div class="top"><div class="marca"><img class="logo" src="icon-192.png" alt=""><div><h1>CardioControl Mante</h1><div class="quien">${esc(MEDICO.nombre)}<br>${esc(MEDICO.especialidad)}</div></div></div></div>
+    <div class="top"><div class="marca"><img class="logo" src="icon-192.png" alt=""><h1>CardioControl Mante</h1></div></div>
+    ${consultorioHTML()}
     <div class="panel">
       <form id="f-acceso" novalidate>
         ${reg ? `<label for="nombre">Nombre completo</label><input id="nombre" autocomplete="name" required>` : ''}
@@ -488,7 +514,8 @@ function vistaAcceso(modo = 'entrar', error = '') {
     </div>
     <p style="text-align:center;margin-top:12px">
       <button class="enlace" id="cambiar">${reg ? 'Ya tengo cuenta: entrar' : 'Primera vez: crear mi cuenta'}</button>
-    </p>`;
+    </p>
+    <p class="nota" style="text-align:center">En una urgencia (dolor de pecho, falta de aire, desmayo) llame al ${URGENCIAS.numero}. Esta aplicación no se revisa en tiempo real.</p>`;
   document.getElementById('cambiar').onclick = () => vistaAcceso(reg ? 'entrar' : 'registro');
   document.getElementById('f-acceso').onsubmit = async e => {
     e.preventDefault();
@@ -539,14 +566,16 @@ async function vistaPaciente() {
     </div>`;
   const enlazarPestanas = () => document.querySelectorAll('[data-pest]').forEach(b => b.onclick = () => { state.pestana = b.dataset.pest; vistaPaciente(); });
   if (state.pestana === 'guia') {
-    app.innerHTML = `${encabezado(state.perfil.nombre || state.user.email)}${pestanas}${guiaHTML(state.perfil)}`;
+    app.innerHTML = `${encabezado(state.perfil.nombre || state.user.email)}${consultorioHTML()}${pestanas}${urgenciaHTML()}${guiaHTML(state.perfil)}`;
     document.getElementById('salir').onclick = salir;
     enlazarPestanas();
     return;
   }
   app.innerHTML = `
     ${encabezado(state.perfil.nombre || state.user.email)}
+    ${consultorioHTML()}
     ${pestanas}
+    ${urgenciaHTML()}
     <h2 style="margin-top:20px">¿Qué quieres anotar?</h2>
     <div class="tipos" role="group" aria-label="Tipo de registro">
       ${Object.entries(TIPOS).map(([k, v]) => `<button data-tipo="${k}" aria-pressed="${k === state.tipo}">${k === 'laboratorio' && !tieneMeta(state.perfil) ? 'Laboratorio' : v.t}</button>`).join('')}
@@ -557,6 +586,7 @@ async function vistaPaciente() {
       <label for="medido_en">Fecha y hora${state.tipo === 'palpitaciones' ? ' en que empezaron' : ''}</label>
       <input id="medido_en" type="datetime-local" value="${ahoraLocal()}">
       <label for="notas">Notas (opcional)</label>
+      <p class="nota" style="margin:0 0 6px">No se revisan en tiempo real. Si es una urgencia, llame al ${URGENCIAS.numero}.</p>
       <textarea id="notas"></textarea>
       <div class="msg" id="msg" role="status"></div>
       <button class="primario" type="submit">Guardar registro</button>
@@ -605,9 +635,11 @@ async function guardarRegistro(e) {
   if (notas) fila.notas = notas;
   const { error } = await db.from('registros').insert(fila);
   if (error) { msg.className = 'msg error'; msg.textContent = 'No se pudo guardar: ' + error.message; return; }
+  const posibleSintoma = state.tipo === 'palpitaciones' || (fila.notas && SINTOMAS_RE.test(sinAcentos(fila.notas)));
   await vistaPaciente();
   const nuevo = document.getElementById('msg');
   nuevo.className = 'msg ok'; nuevo.textContent = 'Registro guardado.';
+  if (posibleSintoma) nuevo.innerHTML = 'Registro guardado. <strong>Esta aplicación no se revisa en tiempo real.</strong> Si tiene dolor de pecho, falta de aire, desmayo o malestar importante, llame al ' + URGENCIAS.numero + ' o acuda a urgencias.';
 }
 
 /* ================== ADMINISTRADOR ================== */
@@ -651,7 +683,7 @@ function pintarAdmin() {
         <div class="d">${regs.length ? 'Último registro: ' + esc(fecha(regs[0].medido_en)) : 'Sin registros'}</div>
         <div class="d">${metaTextoAdmin(p)}</div>
         ${p.riesgo_cv ? `<div class="d">Riesgo cardiovascular: ${esc(p.riesgo_cv)}</div>` : ''}
-        ${nAl ? `<div class="aviso">${nAl} registro(s) fuera de rango en 7 días</div>` : ''}
+        ${nAl ? `<div class="aviso">${nAl} registro(s) con alerta en 7 días</div>` : ''}
       </button></li>`).join('')}</ul>` : '<p class="vacio">Aún no hay pacientes registrados. Comparte el enlace de la app para que creen su cuenta.</p>'}`;
   document.getElementById('salir').onclick = salir;
   document.getElementById('copiar').onclick = copiarEnlace;
@@ -701,9 +733,12 @@ function pintarPaciente() {
 const urlApp = () => location.origin + location.pathname.replace(/index\.html$/, '');
 
 function enlaceWhatsApp() {
-  const texto = 'Hola, le comparto la aplicación para registrar sus mediciones (presión, pulso, peso, glucosa, palpitaciones e INR). ' +
+  const texto = 'Hola, le escribe el ' + MEDICO.nombre + ' (' + MEDICO.consultorio + '). Le comparto la aplicación para registrar sus mediciones (presión, pulso, peso, glucosa, palpitaciones y resultados de laboratorio). ' +
     'Ábrala aquí: ' + urlApp() + '\n\nToque «Primera vez: crear mi cuenta» y use su correo. ' +
-    'Después puede instalarla en su celular para abrirla con un toque.';
+    
+    'Después puede instalarla en su celular para abrirla con un toque.' +
+    '\n\nIMPORTANTE: ni esta aplicación ni este chat se revisan en tiempo real. Si tiene dolor de pecho, falta de aire, desmayo o alteración de la conciencia, palpitaciones intensas o malestar general importante, llame al ' + URGENCIAS.numero + ' o acuda a urgencias.' +
+    '\n\nConsultas no urgentes: Tel. ' + MEDICO.telefono + ', ' + MEDICO.nota.toLowerCase() + '.';
   return 'https://wa.me/?text=' + encodeURIComponent(texto);
 }
 
