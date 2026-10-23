@@ -30,6 +30,7 @@
   }
 }
 *,*::before,*::after{box-sizing:inherit}
+details *,details *::before,details *::after{box-sizing:border-box}
 html{scroll-padding-top:env(safe-area-inset-top,0px)}
 body{margin:0;background:var(--paper);color:var(--ink);font:400 18px/1.5 "Atkinson Hyperlegible",system-ui,sans-serif}
 #app{max-width:640px;margin:0 auto;padding:16px 16px 48px}
@@ -74,9 +75,26 @@ svg text{fill:var(--muted);font-size:10px}
 #mapa{height:380px;border-radius:12px;border:1px solid var(--line);margin-top:12px;background:var(--card);overflow:hidden}
 .escala{flex:1;height:10px;border-radius:5px;background:linear-gradient(90deg,rgb(245,197,66),rgb(240,140,46),rgb(198,40,40));max-width:200px}
 table.tabla{width:100%;border-collapse:collapse;font-size:.95rem}
+table.tabla.compacta{font-size:.85rem}
+table.tabla.compacta .num{white-space:nowrap}
+table.tabla.compacta .pc{display:block;color:var(--muted);font-size:.8rem}
 table.tabla th,table.tabla td{text-align:left;padding:8px 6px;border-bottom:1px solid var(--line)}
 table.tabla .num{text-align:right}
 .leaflet-container{font:inherit}
+.tiles{display:grid;grid-template-columns:1fr 1fr;gap:8px}
+.tile{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:12px 14px;display:flex;flex-direction:column}
+.tile-num{font-size:1.9rem;font-weight:700;line-height:1.1}
+.tile-et{color:var(--muted);font-size:.9rem}
+.hero{display:flex;align-items:baseline;gap:8px;margin-top:10px}
+.hero-num{font-size:2.4rem;font-weight:700;line-height:1}
+.hero-et{color:var(--muted)}
+.pista-ctrl{display:flex;gap:2px;height:12px;border-radius:6px;overflow:hidden;background:var(--line);margin-top:8px}
+.pista-ctrl span{display:block;height:100%}
+.barra-fila{display:grid;grid-template-columns:minmax(0,9.5em) 1fr auto;gap:8px;align-items:center;margin:8px 0}
+.barra-et{font-size:.92rem;line-height:1.25}
+.barra-pista{height:14px;background:var(--line);border-radius:4px;overflow:hidden}
+.barra{display:block;height:100%;background:var(--brand);border-radius:0 4px 4px 0}
+.barra-num{font-weight:700;font-size:.95rem;white-space:nowrap}
 .consultorio{color:var(--muted);font-size:.95rem;margin:0 0 4px}
 .consultorio strong{color:var(--ink)}
 .consultorio a{color:var(--brand);font-weight:700}
@@ -138,7 +156,7 @@ const app = document.getElementById('app');
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const ahoraLocal = () => { const d = new Date(); d.setMinutes(d.getMinutes() - d.getTimezoneOffset()); return d.toISOString().slice(0, 16); };
 const fecha = iso => new Date(iso).toLocaleString('es', { weekday:'short', day:'numeric', month:'short', hour:'2-digit', minute:'2-digit' });
-const state = { user:null, perfil:null, tipo:'presion', pestana:'registrar', modoRegistro:false, pacientes:[], regs:[], sel:null, canal:null, dx:[], sectores:[], vistaAdmin:'lista', filtroMapa:'', msgDx:'' };
+const state = { user:null, perfil:null, tipo:'presion', pestana:'registrar', modoRegistro:false, pacientes:[], regs:[], sel:null, canal:null, dx:[], sectores:[], vistaAdmin:'lista', filtroMapa:'', msgDx:'', config:null };
 
 const TIPOS = {
   presion: { t:'Presión y pulso', campos:[
@@ -811,6 +829,9 @@ function datosPacienteHTML(p) {
   const extra = p.sector && !nombres.includes(p.sector) ? [p.sector] : [];
   return `<h2>Datos del paciente</h2>
   <div class="panel" style="padding-top:12px">
+    <label for="fnac">Fecha de nacimiento</label>
+    <input id="fnac" type="date" value="${p.fecha_nacimiento || ''}">
+    ${edad(p.fecha_nacimiento) != null ? `<p class="nota" style="margin:4px 0 0">${edad(p.fecha_nacimiento)} años</p>` : ''}
     <label for="sexo">Sexo</label>
     <select id="sexo"><option value="">Sin registrar</option><option value="F"${p.sexo === 'F' ? ' selected' : ''}>Mujer</option><option value="M"${p.sexo === 'M' ? ' selected' : ''}>Hombre</option></select>
     <p class="nota" style="margin:4px 0 0">Ajusta los rangos de referencia de creatinina y HDL.</p>
@@ -827,9 +848,10 @@ function enlazarDatos(p) {
   document.getElementById('guardar-datos').onclick = async () => {
     const sexo = document.getElementById('sexo').value || null;
     const sector = document.getElementById('sector').value || null;
-    const { error } = await db.from('profiles').update({ sexo, sector }).eq('id', p.id);
+    const fecha_nacimiento = document.getElementById('fnac').value || null;
+    const { error } = await db.from('profiles').update({ sexo, sector, fecha_nacimiento }).eq('id', p.id);
     if (error) { msg.className = 'msg error'; msg.textContent = 'No se pudo guardar: ' + error.message + ' (¿ya ejecutó el archivo SQL de esta actualización?)'; return; }
-    p.sexo = sexo; p.sector = sector;
+    p.sexo = sexo; p.sector = sector; p.fecha_nacimiento = fecha_nacimiento;
     msg.className = 'msg ok'; msg.textContent = 'Guardado.';
   };
 }
@@ -954,6 +976,267 @@ async function recargarSectores() {
   state.sectores = data || [];
 }
 
+/* ================== METAS Y ESTADÍSTICAS ================== */
+/* Metas generales: PA menos de 130/80 (AHA/ACC 2025); HbA1c menos de 7% (ADA).
+   Se cambian en Estadísticas > Metas generales y cada paciente puede tener las suyas. */
+const METAS_BASE = { meta_pas: 130, meta_pad: 80, meta_hba1c: 7.0, dias_pa: 30, meses_hba1c: 6, ic_tolerancia_kg: 2.0, dias_ic: 30 };
+const metasGenerales = () => {
+  const g = Object.assign({}, METAS_BASE);
+  for (const k of Object.keys(METAS_BASE)) if (state.config && state.config[k] != null) g[k] = Number(state.config[k]);
+  return g;
+};
+function edad(fn) {
+  if (!fn) return null;
+  const d = new Date(fn + 'T12:00:00'), h = new Date();
+  let e = h.getFullYear() - d.getFullYear();
+  const m = h.getMonth() - d.getMonth();
+  if (m < 0 || (m === 0 && h.getDate() < d.getDate())) e--;
+  return e >= 0 && e < 120 ? e : null;
+}
+const GRUPOS_EDAD = [['Menos de 40', 0, 40], ['40 a 59', 40, 60], ['60 a 74', 60, 75], ['75 o más', 75, 200]];
+const SEXO_TXT = { F: 'Mujer', M: 'Hombre' };
+const tieneDx = (p, cat) => state.dx.some(d => d.paciente_id === p.id && d.categoria === cat);
+const pct = (a, b) => b ? Math.round(a * 100 / b) : 0;
+const promedio = xs => xs.length ? xs.reduce((a, b) => a + b, 0) / xs.length : null;
+const numONulo = v => (v === '' || v == null) ? null : Number(v);
+
+function metasPaciente(p) {
+  const g = metasGenerales();
+  return {
+    pas: p.meta_pas != null ? Number(p.meta_pas) : g.meta_pas,
+    pad: p.meta_pad != null ? Number(p.meta_pad) : g.meta_pad,
+    hba1c: p.meta_hba1c != null ? Number(p.meta_hba1c) : g.meta_hba1c
+  };
+}
+const regsDe = p => state.regs.filter(r => r.paciente_id === p.id);
+const desdeDias = d => Date.now() - d * 864e5;
+
+function controlHTA(p) {
+  const g = metasGenerales(), m = metasPaciente(p);
+  const pa = regsDe(p).filter(r => r.tipo === 'presion' && r.sistolica != null && r.diastolica != null && new Date(r.medido_en).getTime() >= desdeDias(g.dias_pa));
+  if (!pa.length) return { estado: 'sin_datos', detalle: `sin presión en los últimos ${g.dias_pa} días` };
+  const s = Math.round(promedio(pa.map(r => Number(r.sistolica)))), d = Math.round(promedio(pa.map(r => Number(r.diastolica))));
+  return { estado: s < m.pas && d < m.pad ? 'controlado' : 'no', s, d,
+    detalle: `${s}/${d} mmHg, promedio de ${pa.length} medición(es); meta menos de ${m.pas}/${m.pad}` };
+}
+
+function controlDM(p) {
+  const g = metasGenerales(), m = metasPaciente(p);
+  const a = regsDe(p).filter(r => r.tipo === 'laboratorio' && r.lab_nombre === 'HbA1c' && r.lab_valor != null && new Date(r.medido_en).getTime() >= desdeDias(g.meses_hba1c * 30.4));
+  if (!a.length) return { estado: 'sin_datos', detalle: `sin HbA1c en los últimos ${g.meses_hba1c} meses` };
+  const ult = a.slice().sort((x, y) => new Date(y.medido_en) - new Date(x.medido_en))[0];
+  const v = Number(ult.lab_valor);
+  return { estado: v < m.hba1c ? 'controlado' : 'no', v, detalle: `HbA1c ${fmt(v)}% (${fechaCorta(ult.medido_en)}); meta menos de ${fmt(m.hba1c)}%` };
+}
+
+function controlIC(p) {
+  const g = metasGenerales();
+  const regs = regsDe(p);
+  const crit = [];
+  if (p.ic_peso_seco != null) {
+    const pesos = regs.filter(r => r.tipo === 'peso' && r.peso_kg != null && new Date(r.medido_en).getTime() >= desdeDias(g.dias_ic))
+      .sort((x, y) => new Date(y.medido_en) - new Date(x.medido_en));
+    const lim = Number(p.ic_peso_seco) + g.ic_tolerancia_kg;
+    crit.push(pesos.length
+      ? { ok: Number(pesos[0].peso_kg) <= lim, t: `peso ${fmt(Number(pesos[0].peso_kg))} kg (peso seco ${fmt(Number(p.ic_peso_seco))} + ${fmt(g.ic_tolerancia_kg)} kg)` }
+      : { ok: null, t: `sin peso en ${g.dias_ic} días` });
+  }
+  if (p.ic_ntprobnp_meta != null) {
+    const nt = regs.filter(r => r.tipo === 'laboratorio' && r.lab_nombre === 'NT-proBNP' && r.lab_valor != null && new Date(r.medido_en).getTime() >= desdeDias(g.meses_hba1c * 30.4))
+      .sort((x, y) => new Date(y.medido_en) - new Date(x.medido_en));
+    crit.push(nt.length
+      ? { ok: Number(nt[0].lab_valor) <= Number(p.ic_ntprobnp_meta), t: `NT-proBNP ${fmt(Number(nt[0].lab_valor))} (meta hasta ${p.ic_ntprobnp_meta})` }
+      : { ok: null, t: `sin NT-proBNP en ${g.meses_hba1c} meses` });
+  }
+  if (p.ic_fc_max != null) {
+    const fc = regs.filter(r => r.tipo === 'presion' && r.pulso != null && new Date(r.medido_en).getTime() >= desdeDias(g.dias_ic)).map(r => Number(r.pulso));
+    crit.push(fc.length
+      ? { ok: promedio(fc) <= Number(p.ic_fc_max), t: `FC promedio ${Math.round(promedio(fc))} lpm (máximo ${p.ic_fc_max})` }
+      : { ok: null, t: `sin pulso en ${g.dias_ic} días` });
+  }
+  if (!crit.length) return { estado: 'sin_metas', detalle: 'sin metas personalizadas de insuficiencia cardiaca' };
+  const evaluados = crit.filter(c => c.ok !== null);
+  if (!evaluados.length) return { estado: 'sin_datos', detalle: crit.map(c => c.t).join('; ') };
+  return { estado: evaluados.every(c => c.ok) ? 'controlado' : 'no', detalle: crit.map(c => (c.ok === false ? '✗ ' : c.ok ? '✓ ' : '') + c.t).join('; ') };
+}
+
+const ESTADO_CTRL = {
+  controlado: { t: 'En meta', c: 'var(--ok)' },
+  no: { t: 'Fuera de meta', c: 'var(--alert)' },
+  sin_datos: { t: 'Sin datos recientes', c: 'var(--muted)' },
+  sin_metas: { t: 'Sin metas personalizadas', c: 'var(--muted)' }
+};
+
+/* ---------- Ficha del paciente: metas personalizadas ---------- */
+function metasPacienteHTML(p) {
+  const g = metasGenerales();
+  const campo = (id, et, v, ph, paso) => `<label for="${id}">${et}</label><input id="${id}" type="number" inputmode="decimal" step="${paso || '1'}" value="${v ?? ''}" placeholder="${ph}">`;
+  return `<h2>Metas personalizadas</h2>
+  <div class="panel" style="padding-top:12px">
+    <p class="nota" style="margin:0">Déjelas vacías para usar las metas generales: presión menos de ${g.meta_pas}/${g.meta_pad} y HbA1c menos de ${fmt(g.meta_hba1c)}%.</p>
+    ${campo('m-pas', 'Presión sistólica: meta menos de (mmHg)', p.meta_pas, 'General: ' + g.meta_pas)}
+    ${campo('m-pad', 'Presión diastólica: meta menos de (mmHg)', p.meta_pad, 'General: ' + g.meta_pad)}
+    ${campo('m-hba1c', 'HbA1c: meta menos de (%)', p.meta_hba1c, 'General: ' + fmt(g.meta_hba1c), '0.1')}
+    <h3 style="font-size:1rem;margin:18px 0 0">Insuficiencia cardiaca</h3>
+    <p class="nota" style="margin:2px 0 0">El paciente está en meta si cumple todas las que registre aquí.</p>
+    ${campo('m-peso', 'Peso seco (kg)', p.ic_peso_seco, 'Ejemplo: 72.5', '0.1')}
+    <p class="nota" style="margin:2px 0 0">Fuera de meta si su último peso supera el peso seco en más de ${fmt(g.ic_tolerancia_kg)} kg.</p>
+    ${campo('m-nt', 'NT-proBNP: meta hasta (pg/mL)', p.ic_ntprobnp_meta, 'Ejemplo: 1000')}
+    ${campo('m-fc', 'Frecuencia cardiaca en reposo: máximo (lpm)', p.ic_fc_max, 'Ejemplo: 70')}
+    <div class="msg" id="msg-metas" role="status"></div>
+    <button class="primario" id="guardar-metas">Guardar metas</button>
+  </div>`;
+}
+
+function enlazarMetas(p) {
+  const msg = document.getElementById('msg-metas');
+  document.getElementById('guardar-metas').onclick = async () => {
+    const v = id => numONulo(document.getElementById(id).value.trim());
+    const fila = { meta_pas: v('m-pas'), meta_pad: v('m-pad'), meta_hba1c: v('m-hba1c'), ic_peso_seco: v('m-peso'), ic_ntprobnp_meta: v('m-nt'), ic_fc_max: v('m-fc') };
+    const malo = (x, a, b) => x != null && !(x >= a && x <= b);
+    if (malo(fila.meta_pas, 90, 200) || malo(fila.meta_pad, 50, 120) || malo(fila.meta_hba1c, 5, 12) || malo(fila.ic_peso_seco, 20, 300) || malo(fila.ic_ntprobnp_meta, 10, 50000) || malo(fila.ic_fc_max, 40, 150)) {
+      msg.className = 'msg error'; msg.textContent = 'Revise los valores: alguno está fuera de un rango posible.'; return;
+    }
+    const { error } = await db.from('profiles').update(fila).eq('id', p.id);
+    if (error) { msg.className = 'msg error'; msg.textContent = 'No se pudo guardar: ' + error.message + ' (¿ya ejecutó el archivo SQL de esta actualización?)'; return; }
+    Object.assign(p, fila);
+    msg.className = 'msg ok'; msg.textContent = 'Metas guardadas.';
+  };
+}
+
+/* ---------- Pantalla de estadísticas ---------- */
+function barra(n, total, etiqueta) {
+  const w = total ? Math.max(n ? 2 : 0, Math.round(n * 100 / total)) : 0;
+  return `<div class="barra-fila"><span class="barra-et">${esc(etiqueta)}</span>
+    <span class="barra-pista" title="${esc(etiqueta)}: ${n} (${pct(n, total)}%)"><span class="barra" style="width:${w}%"></span></span>
+    <span class="barra-num">${n} <span class="nota">(${pct(n, total)}%)</span></span></div>`;
+}
+
+function tarjetaControl(titulo, cat, fn, metaTexto) {
+  const pac = state.pacientes.filter(p => tieneDx(p, cat));
+  const res = pac.map(p => ({ p, r: fn(p) }));
+  const n = k => res.filter(x => x.r.estado === k).length;
+  const ctrl = n('controlado'), no = n('no'), eval_ = ctrl + no;
+  const lista = res.slice().sort((a, b) => ['no', 'sin_datos', 'sin_metas', 'controlado'].indexOf(a.r.estado) - ['no', 'sin_datos', 'sin_metas', 'controlado'].indexOf(b.r.estado));
+  return `<div class="panel" style="padding-top:14px">
+    <strong>${esc(titulo)}</strong>
+    <div class="nota">${esc(metaTexto)}</div>
+    ${pac.length ? `
+      <div class="hero"><span class="hero-num">${eval_ ? pct(ctrl, eval_) + '%' : '—'}</span><span class="hero-et">en meta</span></div>
+      <div class="pista-ctrl" role="img" aria-label="${ctrl} en meta y ${no} fuera de meta">
+        <span style="width:${eval_ ? pct(ctrl, eval_) : 0}%;background:var(--ok)"></span><span style="width:${eval_ ? 100 - pct(ctrl, eval_) : 0}%;background:var(--alert)"></span>
+      </div>
+      <p style="margin:8px 0 0"><strong>${ctrl}</strong> en meta, <strong>${no}</strong> fuera de meta, de ${eval_} con datos. ${n('sin_datos') ? n('sin_datos') + ' sin datos recientes. ' : ''}${n('sin_metas') ? n('sin_metas') + ' sin metas personalizadas.' : ''}</p>
+      <details style="margin-top:10px"><summary>Ver pacientes (${pac.length})</summary>
+        <ul class="lista" style="margin-bottom:12px">${lista.map(({ p, r }) => `<li><button class="pac item" data-ir="${p.id}">
+          <div class="n">${esc(p.nombre || 'Sin nombre')} <span class="badge" style="color:${ESTADO_CTRL[r.estado].c}">${ESTADO_CTRL[r.estado].t}</span></div>
+          <div class="d">${esc(r.detalle)}</div></button></li>`).join('')}</ul>
+      </details>` : `<p class="vacio" style="margin-top:8px">Ningún paciente tiene registrado el diagnóstico «${esc(cat)}».</p>`}
+  </div>`;
+}
+
+function pintarEstadisticas() {
+  const pac = state.pacientes, N = pac.length, g = metasGenerales();
+  const edades = pac.map(p => edad(p.fecha_nacimiento)).filter(e => e != null);
+  const muj = pac.filter(p => p.sexo === 'F').length, hom = pac.filter(p => p.sexo === 'M').length;
+  const filasDx = DX_CATEGORIAS.map(cat => {
+    const ps = pac.filter(p => tieneDx(p, cat));
+    const ed = ps.map(p => edad(p.fecha_nacimiento)).filter(e => e != null);
+    return { cat, n: ps.length, f: ps.filter(p => p.sexo === 'F').length, m: ps.filter(p => p.sexo === 'M').length, ed: promedio(ed) };
+  }).filter(x => x.n).sort((a, b) => b.n - a.n);
+  const conDx = pac.filter(p => state.dx.some(d => d.paciente_id === p.id)).length;
+
+  app.innerHTML = `
+    ${encabezado('Administrador')}
+    <button id="volver" class="enlace" style="padding-left:0">Volver a pacientes</button>
+    <h2 style="margin-top:4px">Estadísticas</h2>
+    <div class="tiles">
+      <div class="tile"><span class="tile-num">${N}</span><span class="tile-et">pacientes</span></div>
+      <div class="tile"><span class="tile-num">${edades.length ? Math.round(promedio(edades)) : '—'}</span><span class="tile-et">edad promedio${edades.length ? '' : ''}</span></div>
+      <div class="tile"><span class="tile-num">${pct(muj, N)}%</span><span class="tile-et">mujeres (${muj})</span></div>
+      <div class="tile"><span class="tile-num">${pct(hom, N)}%</span><span class="tile-et">hombres (${hom})</span></div>
+    </div>
+    <p class="nota" style="margin:8px 0 0">${N - edades.length} sin fecha de nacimiento y ${N - muj - hom} sin sexo registrado. Complételos en la ficha de cada paciente.</p>
+
+    <h2>Grupos de edad</h2>
+    <div class="panel" style="padding-top:12px">
+      ${edades.length ? GRUPOS_EDAD.map(([t, a, b]) => barra(edades.filter(e => e >= a && e < b).length, edades.length, t)).join('') : '<p class="vacio">Registre la fecha de nacimiento de sus pacientes para ver esta gráfica.</p>'}
+      ${edades.length ? `<p class="nota" style="margin:8px 0 0">De ${edades.length} paciente(s) con fecha de nacimiento.</p>` : ''}
+    </div>
+
+    <h2>Por patología</h2>
+    ${filasDx.length ? `<div class="panel" style="padding-top:12px">
+      ${filasDx.map(x => barra(x.n, N, x.cat)).join('')}
+      <p class="nota" style="margin:8px 0 0">Porcentaje sobre ${N} paciente(s). Un paciente puede tener varias patologías. ${N - conDx} sin diagnóstico registrado.</p>
+    </div>
+    <div style="overflow-x:auto;margin-top:12px"><table class="tabla compacta">
+      <thead><tr><th>Patología</th><th class="num">Total</th><th class="num">Mujeres</th><th class="num">Hombres</th><th class="num">Edad</th></tr></thead>
+      <tbody>${filasDx.map(x => `<tr><td>${esc(x.cat)}</td><td class="num"><strong>${x.n}</strong></td><td class="num">${x.f}<span class="pc">${pct(x.f, x.n)}%</span></td><td class="num">${x.m}<span class="pc">${pct(x.m, x.n)}%</span></td><td class="num">${x.ed != null ? Math.round(x.ed) : '—'}</td></tr>`).join('')}</tbody>
+    </table></div>` : '<p class="vacio">Todavía no hay diagnósticos registrados.</p>'}
+
+    <h2>Control</h2>
+    ${tarjetaControl('Hipertensión arterial', 'Hipertensión arterial', controlHTA, `Promedio de presión de los últimos ${g.dias_pa} días por debajo de la meta del paciente (general: menos de ${g.meta_pas}/${g.meta_pad}).`)}
+    ${tarjetaControl('Diabetes mellitus', 'Diabetes mellitus', controlDM, `Última HbA1c de los últimos ${g.meses_hba1c} meses por debajo de la meta del paciente (general: menos de ${fmt(g.meta_hba1c)}%).`)}
+    ${tarjetaControl('Insuficiencia cardiaca', 'Insuficiencia cardiaca', controlIC, 'Según las metas personalizadas de cada paciente: peso seco, NT-proBNP y frecuencia cardiaca.')}
+    <p class="nota" style="margin-top:8px">Los porcentajes se calculan con lo que capturan los pacientes en la aplicación y no sustituyen la evaluación en consulta.</p>
+
+    <details>
+      <summary>Metas generales</summary>
+      <label for="g-pas">Presión sistólica: meta menos de (mmHg)</label><input id="g-pas" type="number" inputmode="decimal" value="${g.meta_pas}">
+      <label for="g-pad">Presión diastólica: meta menos de (mmHg)</label><input id="g-pad" type="number" inputmode="decimal" value="${g.meta_pad}">
+      <label for="g-dpa">Días de presión que se promedian</label><input id="g-dpa" type="number" inputmode="decimal" value="${g.dias_pa}">
+      <label for="g-hba1c">HbA1c: meta menos de (%)</label><input id="g-hba1c" type="number" inputmode="decimal" step="0.1" value="${g.meta_hba1c}">
+      <label for="g-mhb">Meses de vigencia de HbA1c y NT-proBNP</label><input id="g-mhb" type="number" inputmode="decimal" value="${g.meses_hba1c}">
+      <label for="g-tol">Insuficiencia cardiaca: kilos permitidos sobre el peso seco</label><input id="g-tol" type="number" inputmode="decimal" step="0.1" value="${g.ic_tolerancia_kg}">
+      <label for="g-dic">Insuficiencia cardiaca: días de peso y pulso que se revisan</label><input id="g-dic" type="number" inputmode="decimal" value="${g.dias_ic}">
+      <p class="nota">Predeterminadas: presión menos de 130/80 (AHA/ACC 2025) y HbA1c menos de 7% (ADA).</p>
+      <div class="msg" id="msg-gen" role="status"></div>
+      <button class="primario" id="guardar-gen" style="margin-bottom:12px">Guardar metas generales</button>
+    </details>
+
+    <h2>Base de datos</h2>
+    <p>Descargue la lista de pacientes con edad, sexo, sector, diagnósticos y control. Se abre en Excel.</p>
+    <button class="secundario" id="exportar">Descargar para Excel (CSV)</button>
+    <p class="nota" style="margin-top:8px">El archivo contiene datos de salud identificables. Guárdelo en un lugar protegido y no lo comparta por WhatsApp ni correo sin cifrar.</p>`;
+
+  document.getElementById('salir').onclick = salir;
+  document.getElementById('volver').onclick = () => { state.vistaAdmin = 'lista'; pintarAdmin(); };
+  document.querySelectorAll('[data-ir]').forEach(b => b.onclick = () => { state.vistaAdmin = 'lista'; state.sel = b.dataset.ir; pintarAdmin(); window.scrollTo(0, 0); });
+  document.getElementById('exportar').onclick = exportarCSV;
+  const msg = document.getElementById('msg-gen');
+  document.getElementById('guardar-gen').onclick = async () => {
+    const v = id => numONulo(document.getElementById(id).value.trim());
+    const fila = { id: 1, meta_pas: v('g-pas'), meta_pad: v('g-pad'), dias_pa: v('g-dpa'), meta_hba1c: v('g-hba1c'), meses_hba1c: v('g-mhb'), ic_tolerancia_kg: v('g-tol'), dias_ic: v('g-dic') };
+    if (Object.values(fila).some(x => x == null || !(x > 0))) { msg.className = 'msg error'; msg.textContent = 'Llene todos los campos con números mayores que cero.'; return; }
+    const { error } = await db.from('config').upsert(fila);
+    if (error) { msg.className = 'msg error'; msg.textContent = 'No se pudo guardar: ' + error.message + ' (¿ya ejecutó el archivo SQL de esta actualización?)'; return; }
+    state.config = fila;
+    pintarEstadisticas();
+  };
+}
+
+function exportarCSV() {
+  const celda = v => { const s = v == null ? '' : String(v); return /[",\n;]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s; };
+  const enc = ['Nombre', 'Fecha de nacimiento', 'Edad', 'Sexo', 'Sector', 'Diagnósticos', 'Último registro', 'Riesgo cardiovascular', 'Anticoagulación',
+    'PA promedio', 'Control HTA', 'HbA1c última', 'Control diabetes', 'Control insuficiencia cardiaca'];
+  const filas = state.pacientes.map(p => {
+    const regs = regsDe(p);
+    const hta = controlHTA(p), dm = controlDM(p), ic = controlIC(p);
+    const dx = [...new Set(state.dx.filter(d => d.paciente_id === p.id).map(d => d.categoria + (d.detalle ? ' (' + d.detalle + ')' : '')))].join('; ');
+    return [p.nombre, p.fecha_nacimiento, edad(p.fecha_nacimiento), SEXO_TXT[p.sexo] || '', p.sector, dx,
+      regs.length ? new Date(regs[0].medido_en).toLocaleDateString('en-CA') : '', p.riesgo_cv, p.indicacion,
+      hta.s != null ? hta.s + '/' + hta.d : '', tieneDx(p, 'Hipertensión arterial') ? ESTADO_CTRL[hta.estado].t : '',
+      dm.v != null ? dm.v : '', tieneDx(p, 'Diabetes mellitus') ? ESTADO_CTRL[dm.estado].t : '',
+      tieneDx(p, 'Insuficiencia cardiaca') ? ESTADO_CTRL[ic.estado].t : ''];
+  });
+  const csv = '﻿' + [enc].concat(filas).map(f => f.map(celda).join(',')).join('\r\n');
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(new Blob([csv], { type: 'text/csv;charset=utf-8' }));
+  a.download = 'CardioControl_pacientes_' + ahoraLocal().slice(0, 10) + '.csv';
+  document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(() => URL.revokeObjectURL(a.href), 2000);
+}
+
 /* ================== ACCESO ================== */
 /* Mensajes claros para los errores de acceso (Supabase devuelve textos en inglés). */
 function mensajeAcceso(error) {
@@ -990,6 +1273,7 @@ function vistaAcceso(modo = 'entrar', aviso = '') {
     <div class="panel">
       <form id="f-acceso" novalidate>
         ${reg ? '<label for="nombre">Nombre completo</label><input id="nombre" autocomplete="name" required>' : ''}
+        ${reg ? '<label for="reg-fnac">Fecha de nacimiento (opcional)</label><input id="reg-fnac" type="date" autocomplete="bday">' : ''}
         ${reg ? '<label for="reg-sector" id="lbl-sector" hidden>Colonia o localidad donde vive (opcional)</label><select id="reg-sector" hidden><option value="">Prefiero no decir</option></select>' : ''}
         ${nue ? '' : campoCorreo}
         ${olv ? '' : campoClave(reg ? 'Contraseña (mínimo 8 caracteres)' : nue ? 'Nueva contraseña (mínimo 8 caracteres)' : 'Contraseña')}
@@ -1064,7 +1348,8 @@ function vistaAcceso(modo = 'entrar', aviso = '') {
       if (nombre.length < 3) { mostrar('Escriba su nombre completo.', false); return; }
       const elSector = document.getElementById('reg-sector');
       const sector = elSector && !elSector.hidden ? elSector.value : '';
-      const { data, error } = await db.auth.signUp({ email: correo, password: clave, options: { data: { nombre, sector }, emailRedirectTo: urlApp() } });
+      const fecha_nacimiento = document.getElementById('reg-fnac').value || '';
+      const { data, error } = await db.auth.signUp({ email: correo, password: clave, options: { data: { nombre, sector, fecha_nacimiento }, emailRedirectTo: urlApp() } });
       if (error) { const m = mensajeAcceso(error); mostrar(m.texto, false, m.reenviar ? correo : ''); return; }
       if (data.user && Array.isArray(data.user.identities) && data.user.identities.length === 0) {
         mostrar('Ese correo ya tiene una cuenta. Toque «Ya tengo cuenta: entrar». Si olvidó su contraseña, use «Olvidé mi contraseña».', false);
@@ -1221,16 +1506,18 @@ async function vistaAdmin() {
 }
 
 async function cargarDatosAdmin() {
-  const [p, r, d, se] = await Promise.all([
+  const [p, r, d, se, cf] = await Promise.all([
     db.from('profiles').select('*').eq('rol', 'paciente').order('nombre'),
     db.from('registros').select('*').order('medido_en', { ascending: false }).limit(3000),
     db.from('diagnosticos').select('*'),
-    db.from('sectores').select('*').order('nombre')
+    db.from('sectores').select('*').order('nombre'),
+    db.from('config').select('*').eq('id', 1).single()
   ]);
   state.pacientes = p.data || [];
   state.regs = r.data || [];
   state.dx = d.data || [];
   state.sectores = se.data || [];
+  state.config = cf.data || null;
 }
 
 async function cargarAdmin() { await cargarDatosAdmin(); pintarAdmin(); }
@@ -1244,6 +1531,7 @@ async function refrescarAdmin() {
 
 function pintarAdmin() {
   if (state.vistaAdmin === 'mapa') return pintarMapa();
+  if (state.vistaAdmin === 'estadisticas') return pintarEstadisticas();
   if (state.sel) return pintarPaciente();
   const hace7 = Date.now() - 7 * 864e5;
   const filas = state.pacientes.map(p => {
@@ -1257,11 +1545,13 @@ function pintarAdmin() {
       <a class="btn-wa" href="${enlaceWhatsApp()}" target="_blank" rel="noopener">Invitar paciente por WhatsApp</a>
       <button id="copiar">Copiar enlace</button>
     </div>
+    <button class="secundario" id="ver-estadisticas" style="margin-bottom:8px">Estadísticas y control de pacientes</button>
     <button class="secundario" id="ver-mapa" style="margin-bottom:16px">Mapa de pacientes por sector y enfermedad</button>
     <h2 style="margin-top:0">Pacientes (${filas.length})</h2>
     ${filas.length ? `<ul class="lista">${filas.map(({ p, regs, nAl }) => `
       <li><button class="pac item${nAl ? ' alerta' : ''}" data-pac="${p.id}">
         <div class="n">${esc(p.nombre || 'Sin nombre')}</div>
+        ${edad(p.fecha_nacimiento) != null || p.sexo ? `<div class="d">${[edad(p.fecha_nacimiento) != null ? edad(p.fecha_nacimiento) + ' años' : '', (SEXO_TXT[p.sexo] || '').toLowerCase()].filter(Boolean).join(', ')}</div>` : ''}
         <div class="d">${regs.length ? 'Último registro: ' + esc(fecha(regs[0].medido_en)) : 'Sin registros'}</div>
         <div class="d">${metaTextoAdmin(p)}</div>
         ${p.riesgo_cv ? `<div class="d">Riesgo cardiovascular: ${esc(p.riesgo_cv)}</div>` : ''}
@@ -1272,6 +1562,7 @@ function pintarAdmin() {
   document.getElementById('salir').onclick = salir;
   document.getElementById('copiar').onclick = copiarEnlace;
   document.getElementById('ver-mapa').onclick = () => { state.vistaAdmin = 'mapa'; pintarMapa(); };
+  document.getElementById('ver-estadisticas').onclick = () => { state.vistaAdmin = 'estadisticas'; pintarEstadisticas(); window.scrollTo(0, 0); };
   document.querySelectorAll('[data-pac]').forEach(b => b.onclick = () => { state.sel = b.dataset.pac; pintarAdmin(); });
 }
 
@@ -1286,6 +1577,7 @@ function pintarPaciente() {
     <h2 style="margin-top:4px">${esc(p.nombre || 'Sin nombre')}</h2>
     ${datosPacienteHTML(p)}
     ${diagnosticosAdminHTML(p)}
+    ${metasPacienteHTML(p)}
     ${presionHTML(regs, false)}
     ${riesgoHTML(p)}
     ${anticoagulacionHTML(p)}
@@ -1299,6 +1591,7 @@ function pintarPaciente() {
   enlazarRiesgo(p);
   enlazarDatos(p);
   enlazarDiagnosticos(p);
+  enlazarMetas(p);
 }
 
 /* ================== COMPARTIR E INSTALAR ================== */
