@@ -18,6 +18,7 @@
 :root{
   --paper:#F3F7F7; --card:#FFFFFF; --ink:#10282F; --muted:#587076; --line:#D3DEDF;
   --brand:#0E6E6E; --on-brand:#FFFFFF; --alert:#B4380F; --alert-bg:#FCE9E1; --ok:#2F6B3A;
+  --z-baja:#2F6FB3; --z-normal:#2E8B4E; --z-elev:#B88A00; --z-e1:#D9731A; --z-e2:#C62828; --z-grave:#7A0F0F; --warn:#8A5200; --warn-bg:#FFF3DC;
   box-sizing:border-box;
   padding-top:env(safe-area-inset-top,0px); padding-bottom:env(safe-area-inset-bottom,0px);
 }
@@ -25,6 +26,7 @@
   :root:not([data-theme="light"]){
     --paper:#0D1A1E; --card:#14262B; --ink:#E8F1F2; --muted:#93AAB0; --line:#27414A;
     --brand:#3FB5B0; --on-brand:#06201F; --alert:#FF9A73; --alert-bg:#3A2018; --ok:#7BC58A;
+    --z-baja:#7FB2EE; --z-normal:#6FCF8E; --z-elev:#F2D04B; --z-e1:#FFA94D; --z-e2:#FF6B6B; --z-grave:#FFA3A3; --warn:#FFC266; --warn-bg:#3A2A12;
   }
 }
 *,*::before,*::after{box-sizing:inherit}
@@ -63,7 +65,18 @@ textarea{min-height:80px}
 .vacio{color:var(--muted)}
 svg{width:100%;height:auto;display:block}
 svg text{fill:var(--muted);font-size:10px}
-.leyenda{display:flex;gap:16px;font-size:.9rem;color:var(--muted);margin-top:4px}
+.leyenda{display:flex;flex-wrap:wrap;justify-content:space-between;gap:16px;font-size:.9rem;color:var(--muted);margin-top:4px}
+.chip{display:inline-flex;align-items:center;gap:6px;font-size:.85rem;color:var(--muted)}
+.chip i{width:12px;height:12px;border-radius:3px;display:inline-block;flex:none}
+.badge{display:inline-block;padding:1px 10px;border-radius:999px;font-size:.85rem;font-weight:700;border:1.5px solid currentColor;line-height:1.5}
+.ref-nota{color:var(--warn);background:var(--warn-bg);border-radius:8px;padding:6px 10px;font-size:.95rem;margin-top:6px;font-weight:700}
+.fila-btn{display:flex;gap:8px;align-items:center;justify-content:space-between}
+#mapa{height:380px;border-radius:12px;border:1px solid var(--line);margin-top:12px;background:var(--card);overflow:hidden}
+.escala{flex:1;height:10px;border-radius:5px;background:linear-gradient(90deg,rgb(245,197,66),rgb(240,140,46),rgb(198,40,40));max-width:200px}
+table.tabla{width:100%;border-collapse:collapse;font-size:.95rem}
+table.tabla th,table.tabla td{text-align:left;padding:8px 6px;border-bottom:1px solid var(--line)}
+table.tabla .num{text-align:right}
+.leaflet-container{font:inherit}
 .consultorio{color:var(--muted);font-size:.95rem;margin:0 0 4px}
 .consultorio strong{color:var(--ink)}
 .consultorio a{color:var(--brand);font-weight:700}
@@ -125,7 +138,7 @@ const app = document.getElementById('app');
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const ahoraLocal = () => { const d = new Date(); d.setMinutes(d.getMinutes() - d.getTimezoneOffset()); return d.toISOString().slice(0, 16); };
 const fecha = iso => new Date(iso).toLocaleString('es', { weekday:'short', day:'numeric', month:'short', hour:'2-digit', minute:'2-digit' });
-const state = { user:null, perfil:null, tipo:'presion', pestana:'registrar', modoRegistro:false, pacientes:[], regs:[], sel:null, canal:null };
+const state = { user:null, perfil:null, tipo:'presion', pestana:'registrar', modoRegistro:false, pacientes:[], regs:[], sel:null, canal:null, dx:[], sectores:[], vistaAdmin:'lista', filtroMapa:'', msgDx:'' };
 
 const TIPOS = {
   presion: { t:'Presión y pulso', campos:[
@@ -190,12 +203,17 @@ const urgenciaHTML = () => `<div class="urgencia" role="note">
   <p class="nota" style="margin:10px 0 0">Esta aplicación no se revisa en tiempo real.</p>
 </div>`;
 
-function itemHTML(r, p, verAlertas, tallaRef) {
+function itemHTML(r, p, verAlertas, tallaRef, esPaciente) {
   const al = verAlertas ? alertas(r, p) : [];
+  const fr = fueraDeReferencia(r, p, tallaRef);
+  const cat = r.tipo === 'presion' ? categoriaPA(r.sistolica, r.diastolica) : null;
   return `<li class="item${al.length ? ' alerta' : ''}">
     <div class="cuando">${esc(fecha(r.medido_en))}</div>
     <div class="que">${esc(resumen(r, tallaRef))}</div>
+    ${cat ? `<div style="margin-top:4px"><span class="badge" style="color:${CAT_PA[cat].c}">${CAT_PA[cat].t}</span></div>` : ''}
     ${r.notas ? `<div>${esc(r.notas)}</div>` : ''}
+    ${fr.length ? `<div class="ref-nota">${esPaciente ? NOTA_REF : 'Fuera de referencia: ' + esc(fr.join(', '))}</div>` : ''}
+    ${esPaciente && cat === 'grave' ? GRAVE_HTML : ''}
     ${al.length ? `<div class="aviso">Alerta: ${esc(al.join(', '))}</div>` : ''}
   </li>`;
 }
@@ -380,53 +398,6 @@ function puntosDe(regs, filtro, valor) {
     .slice(-30);
 }
 
-function serieGrafica(titulo, unidad, puntos, refs, textoMeta) {
-  if (!puntos.length) return '';
-  refs = refs || [];
-  const ult = puntos[puntos.length - 1];
-  let grafico = '<p class="vacio">Con un segundo resultado aparecerá la gráfica.' + (textoMeta ? ' ' + esc(textoMeta) + '.' : '') + '</p>';
-  if (puntos.length >= 2) {
-    const W = 320, H = 130, m = 28;
-    const vals = puntos.map(q => q.v).concat(refs);
-    let min = Math.min(...vals), max = Math.max(...vals);
-    if (max === min) { max += 1; min -= 1; }
-    const pad = (max - min) * 0.1; min -= pad; max += pad;
-    const x = i => m + i * (W - m * 1.5) / (puntos.length - 1);
-    const y = v => H - m + 4 - (v - min) * (H - m * 1.6) / (max - min);
-    const linea = puntos.map((q, i) => `${x(i).toFixed(1)},${y(q.v).toFixed(1)}`).join(' ');
-    const circulos = puntos.map((q, i) => `<circle cx="${x(i).toFixed(1)}" cy="${y(q.v).toFixed(1)}" r="3" fill="var(--brand)"/>`).join('');
-    const guias = refs.map(v => `<line x1="${m}" x2="${W}" y1="${y(v).toFixed(1)}" y2="${y(v).toFixed(1)}" stroke="var(--alert)" stroke-dasharray="2 4" opacity=".7"/>`).join('');
-    grafico = `<svg viewBox="0 0 ${W} ${H}" role="img" aria-label="Tendencia de ${esc(titulo)}">
-      <text x="2" y="${y(max - pad).toFixed(0)}">${fmt(max - pad)}</text>
-      <text x="2" y="${y(min + pad).toFixed(0)}">${fmt(min + pad)}</text>
-      ${guias}<polyline points="${linea}" fill="none" stroke="var(--brand)" stroke-width="2.5" stroke-linejoin="round"/>${circulos}
-    </svg>
-    <div class="leyenda"><span>${esc(fechaCorta(puntos[0].t))}</span><span>${esc(fechaCorta(ult.t))}</span>${textoMeta ? `<span>${esc(textoMeta)}</span>` : ''}</div>`;
-  }
-  return `<div class="panel" style="padding-top:12px">
-    <strong>${esc(titulo)}</strong>
-    <div style="margin:4px 0 8px">Último: <strong>${fmt(ult.v)} ${esc(unidad)}</strong> <span class="nota">(${esc(fechaCorta(ult.t))})</span></div>
-    ${grafico}
-  </div>`;
-}
-
-function laboratoriosHTML(regs, p) {
-  const bloques = [];
-  if (tieneMeta(p)) {
-    bloques.push(serieGrafica('INR', '', puntosDe(regs, r => r.inr != null, r => r.inr), [Number(p.inr_min), Number(p.inr_max)], 'Meta ' + rangoTexto(p)));
-  }
-  for (const l of LABS) {
-    const meta = l.n === 'LDL' && LDL_META[p.riesgo_cv] != null ? [LDL_META[p.riesgo_cv]] : [];
-    bloques.push(serieGrafica(l.n, l.u, puntosDe(regs, r => r.tipo === 'laboratorio' && r.lab_nombre === l.n, r => r.lab_valor), meta, meta.length ? 'Meta menor de ' + meta[0] : ''));
-  }
-  bloques.push(serieGrafica('Peso', 'kg', puntosDe(regs, r => r.tipo === 'peso' && r.peso_kg != null, r => r.peso_kg), [], ''));
-  const ptsIMC = puntosIMC(regs);
-  bloques.push(serieGrafica('IMC', 'kg/m²', ptsIMC, [], ptsIMC.length ? 'Categoría: ' + categoriaIMC(ptsIMC[ptsIMC.length - 1].v) : ''));
-  bloques.push(serieGrafica('Glucometría', 'mg/dL', puntosDe(regs, r => r.tipo === 'glucosa', r => r.glucosa_mgdl), [], ''));
-  const hay = bloques.filter(Boolean);
-  return `<h2>Peso, laboratorio y glucosa</h2>${hay.length ? hay.join('') : '<p class="vacio">Aún no hay peso, laboratorio ni glucometrías registrados.</p>'}`;
-}
-
 /* ---------- Paciente: guía de cuidados ---------- */
 function guiaHTML(p) {
   p = p || {};
@@ -539,6 +510,450 @@ function guiaHTML(p) {
   </details>`;
 }
 
+/* ================== RANGOS DE REFERENCIA ================== */
+/* Adultos. Presión: AHA/ACC 2025. Pulso en reposo: AHA (60 a 100). Glucosa y HbA1c: ADA.
+   Lípidos: NCEP ATP III. NT-proBNP: ESC 2021 de insuficiencia cardiaca (fuera de un cuadro agudo).
+   Creatinina: rangos habituales de laboratorio. IMC: OMS. Cámbialos aquí si quieres otros. */
+const CAT_PA = {
+  baja:    { t: 'Baja', rango: 'menos de 90/60', c: 'var(--z-baja)' },
+  normal:  { t: 'Normal', rango: 'menos de 120/80', c: 'var(--z-normal)' },
+  elevada: { t: 'Elevada', rango: '120 a 129 y menos de 80', c: 'var(--z-elev)' },
+  etapa1:  { t: 'Hipertensión etapa 1', rango: '130 a 139 u 80 a 89', c: 'var(--z-e1)' },
+  etapa2:  { t: 'Hipertensión etapa 2', rango: '140/90 o más', c: 'var(--z-e2)' },
+  grave:   { t: 'Hipertensión grave', rango: 'más de 180/120', c: 'var(--z-grave)' }
+};
+function categoriaPA(s, d) {
+  if (s == null && d == null) return null;
+  const S = s == null ? null : Number(s), D = d == null ? null : Number(d);
+  if ((S != null && S > 180) || (D != null && D > 120)) return 'grave';
+  if ((S != null && S >= 140) || (D != null && D >= 90)) return 'etapa2';
+  if ((S != null && S >= 130) || (D != null && D >= 80)) return 'etapa1';
+  if (S != null && S >= 120) return 'elevada';
+  if ((S != null && S < 90) || (D != null && D < 60)) return 'baja';
+  return 'normal';
+}
+const ZONAS_SIS = [
+  { hasta: 90, c: CAT_PA.baja.c }, { desde: 90, hasta: 120, c: CAT_PA.normal.c }, { desde: 120, hasta: 130, c: CAT_PA.elevada.c },
+  { desde: 130, hasta: 140, c: CAT_PA.etapa1.c }, { desde: 140, hasta: 180, c: CAT_PA.etapa2.c }, { desde: 180, c: CAT_PA.grave.c }
+];
+const ZONAS_DIA = [
+  { hasta: 60, c: CAT_PA.baja.c }, { desde: 60, hasta: 80, c: CAT_PA.normal.c }, { desde: 80, hasta: 90, c: CAT_PA.etapa1.c },
+  { desde: 90, hasta: 120, c: CAT_PA.etapa2.c }, { desde: 120, c: CAT_PA.grave.c }
+];
+const REF_PULSO = { min: 60, max: 100, texto: '60 a 100 latidos por minuto en reposo' };
+const REF_IMC = { min: 18.5, lt: 25, texto: '18.5 a 24.9 kg/m²' };
+const REF_LAB = {
+  'Creatinina sérica': s => s === 'F' ? { min: 0.6, max: 1.1, texto: '0.6 a 1.1 mg/dL (mujeres)' }
+    : s === 'M' ? { min: 0.7, max: 1.3, texto: '0.7 a 1.3 mg/dL (hombres)' }
+    : { min: 0.6, max: 1.3, texto: '0.6 a 1.3 mg/dL (varía según sexo y laboratorio)' },
+  'NT-proBNP': () => ({ lt: 125, texto: 'menos de 125 pg/mL fuera de un cuadro agudo (aumenta con la edad y con enfermedad renal)' }),
+  'HbA1c': () => ({ lt: 5.7, texto: 'menos de 5.7% (5.7 a 6.4% prediabetes; 6.5% o más diabetes)' }),
+  'Glucosa (laboratorio)': () => ({ min: 70, lt: 100, texto: '70 a 99 mg/dL en ayunas' }),
+  'Colesterol total': () => ({ lt: 200, texto: 'menos de 200 mg/dL' }),
+  'Triglicéridos': () => ({ lt: 150, texto: 'menos de 150 mg/dL' }),
+  'HDL': s => s === 'F' ? { min: 50, texto: '50 mg/dL o más (mujeres)' }
+    : s === 'M' ? { min: 40, texto: '40 mg/dL o más (hombres)' }
+    : { min: 40, texto: '40 mg/dL o más en hombres y 50 o más en mujeres' },
+  'LDL': () => ({ lt: 100, texto: 'menos de 100 mg/dL (óptimo)' })
+};
+const GUIAS_LAB = { 'HbA1c': [{ v: 6.5, t: 'Diabetes' }] };
+const refGlucometria = mom => (mom === 'despues_comida' || mom === 'otro')
+  ? { min: 70, lt: 140, texto: '70 a 139 mg/dL después de comer o en otro momento' }
+  : { min: 70, lt: 100, texto: '70 a 99 mg/dL en ayunas o antes de comer' };
+const refINR = p => tieneMeta(p) ? { min: Number(p.inr_min), max: Number(p.inr_max), texto: 'meta indicada por su médico, ' + rangoTexto(p) } : null;
+const enRango = (v, r) => !r || ((r.min == null || v >= r.min) && (r.max == null || v <= r.max) && (r.lt == null || v < r.lt));
+const NOTA_REF = 'Fuera del rango de referencia: coméntelo con su médico en su consulta.';
+const GRAVE_HTML = `<div class="urgencia" role="alert" style="margin:8px 0 0"><p style="margin:0"><strong>Presión muy alta.</strong> Espere 5 minutos y vuelva a medirla. Si sigue igual de alta, comuníquese con su médico de inmediato. Si además tiene dolor de pecho o de espalda, falta de aire, debilidad, dificultad para hablar o cambios en la visión, llame al ${URGENCIAS.numero}.</p></div>`;
+const FUENTES_REF = 'Rangos para adultos. Presión: AHA/ACC 2025. Pulso: AHA. Glucosa y HbA1c: ADA. Lípidos: NCEP ATP III. NT-proBNP: ESC 2021. IMC: OMS. Su médico puede indicarle metas distintas.';
+
+/* Qué valores de un registro quedan fuera de referencia. Devuelve textos cortos. */
+function fueraDeReferencia(r, p, tallaRef) {
+  p = p || {};
+  const f = [];
+  if (r.tipo === 'presion') {
+    const c = categoriaPA(r.sistolica, r.diastolica);
+    if (c && c !== 'normal') f.push('Presión ' + CAT_PA[c].t.toLowerCase());
+    if (r.pulso != null && !enRango(Number(r.pulso), REF_PULSO)) f.push('Pulso ' + r.pulso);
+  }
+  if (r.tipo === 'glucosa' && r.glucosa_mgdl != null && !enRango(Number(r.glucosa_mgdl), refGlucometria(r.glucosa_momento))) f.push('Glucosa ' + r.glucosa_mgdl);
+  if (r.tipo === 'laboratorio') {
+    if (r.inr != null && tieneMeta(p) && !enRango(Number(r.inr), refINR(p))) f.push('INR ' + r.inr);
+    const fn = REF_LAB[r.lab_nombre];
+    if (fn && r.lab_valor != null && !enRango(Number(r.lab_valor), fn(p.sexo))) f.push(r.lab_nombre + ' ' + r.lab_valor);
+  }
+  if (r.tipo === 'peso' && r.peso_kg != null) {
+    const v = imc(r.peso_kg, r.talla_cm != null ? r.talla_cm : tallaRef);
+    if (v != null && !enRango(v, REF_IMC)) f.push('IMC ' + v.toFixed(1));
+  }
+  return f;
+}
+
+/* ---------- Gráficas con zonas de referencia ---------- */
+function svgSerie({ puntos, zonas, guias, colorDe, yMin, yMax, titulo }) {
+  const W = 320, H = 150, m = 30, top = 8, bot = 18;
+  const vals = puntos.map(q => q.v);
+  const extra = [];
+  (zonas || []).forEach(z => { if (z.desde != null) extra.push(z.desde); if (z.hasta != null) extra.push(z.hasta); });
+  (guias || []).forEach(g => extra.push(g.v));
+  let min, max;
+  if (yMin != null && yMax != null) { min = Math.min(yMin, ...vals); max = Math.max(yMax, ...vals); }
+  else {
+    const base = vals.concat(extra.filter(v => Number.isFinite(v)));
+    min = Math.min(...base); max = Math.max(...base);
+  }
+  if (max === min) { max += 1; min -= 1; }
+  const pad = (max - min) * 0.08; min -= pad; max += pad;
+  const n = puntos.length;
+  const x = i => n === 1 ? (m + W) / 2 : m + 6 + i * (W - m - 14) / (n - 1);
+  const y = v => H - bot - (v - min) * (H - bot - top) / (max - min);
+  const rects = (zonas || []).map(z => {
+    const a = Math.max(z.desde ?? -Infinity, min), b = Math.min(z.hasta ?? Infinity, max);
+    if (!(b > a)) return '';
+    return `<rect x="${m}" y="${y(b).toFixed(1)}" width="${W - m}" height="${(y(a) - y(b)).toFixed(1)}" fill="${z.c}" opacity=".18"/>`;
+  }).join('');
+  const marcas = [];
+  (zonas || []).forEach(z => [z.desde, z.hasta].forEach(v => { if (v != null && v > min && v < max && !marcas.includes(v)) marcas.push(v); }));
+  marcas.sort((a, b) => a - b);
+  const visibles = marcas.filter((v, i) => i === 0 || Math.abs(y(v) - y(marcas[i - 1])) >= 9);
+  const etiquetas = (visibles.length ? visibles : [min + pad, max - pad])
+    .map(v => `<text x="${m - 4}" y="${(y(v) + 3).toFixed(1)}" text-anchor="end">${fmt(v)}</text>`).join('');
+  const lineasGuia = (guias || []).filter(g => g.v > min && g.v < max).map(g =>
+    `<line x1="${m}" x2="${W}" y1="${y(g.v).toFixed(1)}" y2="${y(g.v).toFixed(1)}" stroke="var(--ink)" stroke-dasharray="3 4" opacity=".55"/>` +
+    `<text x="${W - 2}" y="${(y(g.v) - 3).toFixed(1)}" text-anchor="end">${esc(g.t)} ${fmt(g.v)}</text>`).join('');
+  const linea = n > 1 ? `<polyline points="${puntos.map((q, i) => `${x(i).toFixed(1)},${y(q.v).toFixed(1)}`).join(' ')}" fill="none" stroke="var(--ink)" stroke-width="1.5" opacity=".45" stroke-linejoin="round"/>` : '';
+  const circulos = puntos.map((q, i) => `<circle cx="${x(i).toFixed(1)}" cy="${y(q.v).toFixed(1)}" r="4" fill="${colorDe(q)}" stroke="var(--card)" stroke-width="1.5"/>`).join('');
+  return `<svg viewBox="0 0 ${W} ${H}" role="img" aria-label="Tendencia de ${esc(titulo || '')}">
+    <line x1="${m}" x2="${m}" y1="${top}" y2="${H - bot}" stroke="var(--line)"/>
+    ${rects}${etiquetas}${lineasGuia}${linea}${circulos}
+  </svg>
+  <div class="leyenda"><span>${esc(fechaCorta(puntos[0].t))}</span>${n > 1 ? `<span>${esc(fechaCorta(puntos[n - 1].t))}</span>` : ''}</div>`;
+}
+
+const COLOR_DENTRO = 'var(--z-normal)', COLOR_FUERA = 'var(--z-e1)';
+
+function panelSerie({ titulo, unidad, puntos, ref, guias, esPaciente, metaTexto }) {
+  if (!puntos.length) return '';
+  const refDe = q => q.ref || ref;
+  const ult = puntos[puntos.length - 1];
+  const r = refDe(ult);
+  const dentro = enRango(ult.v, r);
+  const zonas = ref ? [{ desde: ref.min, hasta: ref.max ?? ref.lt, c: COLOR_DENTRO }] : [];
+  const estado = !r ? '' : esPaciente
+    ? (dentro ? '' : `<div class="ref-nota">${NOTA_REF}</div>`)
+    : `<span class="badge" style="color:${dentro ? COLOR_DENTRO : COLOR_FUERA}">${dentro ? 'Dentro del rango' : 'Fuera del rango'}</span>`;
+  const textoRef = ref ? ref.texto : (r ? r.texto : '');
+  return `<div class="panel" style="padding-top:12px">
+    <strong>${esc(titulo)}</strong>
+    <div style="margin:4px 0 8px">Último: <strong>${fmt(ult.v)} ${esc(unidad)}</strong> <span class="nota">(${esc(fechaCorta(ult.t))})</span> ${esPaciente ? '' : estado}</div>
+    ${esPaciente ? estado : ''}
+    ${svgSerie({ puntos, zonas, guias, titulo, colorDe: q => !refDe(q) ? 'var(--brand)' : enRango(q.v, refDe(q)) ? COLOR_DENTRO : COLOR_FUERA })}
+    ${textoRef ? `<p class="nota" style="margin:6px 0 0">Rango de referencia: ${esc(textoRef)}.</p>` : ''}
+    ${metaTexto ? `<p class="nota" style="margin:2px 0 0">${esc(metaTexto)}</p>` : ''}
+  </div>`;
+}
+
+function leyendaPA() {
+  return `<div class="leyenda" style="gap:10px 14px">${['normal', 'elevada', 'etapa1', 'etapa2', 'grave', 'baja']
+    .map(k => `<span class="chip"><i style="background:${CAT_PA[k].c}"></i>${CAT_PA[k].t} (${CAT_PA[k].rango})</span>`).join('')}</div>`;
+}
+
+function presionHTML(regs, esPaciente) {
+  const pts = regs.filter(r => r.tipo === 'presion' && (r.sistolica != null || r.diastolica != null))
+    .slice().sort((a, b) => new Date(a.medido_en) - new Date(b.medido_en)).slice(-30);
+  if (!pts.length) return `<h2>Presión arterial</h2><p class="vacio">Aún no hay mediciones de presión.</p>`;
+  const ult = pts[pts.length - 1];
+  const cat = categoriaPA(ult.sistolica, ult.diastolica);
+  const desde = Date.now() - 7 * 864e5;
+  const rec = pts.filter(r => new Date(r.medido_en).getTime() >= desde && r.sistolica != null && r.diastolica != null);
+  let promedio = '';
+  if (rec.length >= 2) {
+    const s = Math.round(rec.reduce((a, r) => a + Number(r.sistolica), 0) / rec.length);
+    const d = Math.round(rec.reduce((a, r) => a + Number(r.diastolica), 0) / rec.length);
+    const cp = categoriaPA(s, d);
+    promedio = `<p style="margin:8px 0 0">Promedio de los últimos 7 días (${rec.length} mediciones): <strong>${s}/${d} mmHg</strong> <span class="badge" style="color:${CAT_PA[cp].c}">${CAT_PA[cp].t}</span></p>`;
+  }
+  const serie = (k, zonas, yMin, yMax) => {
+    const p = pts.filter(r => r[k] != null).map(r => ({ t: r.medido_en, v: Number(r[k]), cat: categoriaPA(r.sistolica, r.diastolica) }));
+    return p.length ? svgSerie({ puntos: p, zonas, yMin, yMax, titulo: k === 'sistolica' ? 'presión sistólica' : 'presión diastólica', colorDe: q => CAT_PA[q.cat].c }) : '';
+  };
+  const pulso = pts.filter(r => r.pulso != null).map(r => ({ t: r.medido_en, v: Number(r.pulso) }));
+  const nota = esPaciente && cat !== 'normal' ? `<div class="ref-nota">${NOTA_REF}</div>` : '';
+  return `<h2>Presión arterial</h2>
+  <div class="panel" style="padding-top:12px">
+    <div>Última: <strong>${ult.sistolica ?? '—'}/${ult.diastolica ?? '—'} mmHg</strong> <span class="nota">(${esc(fechaCorta(ult.medido_en))})</span></div>
+    <div style="margin-top:6px"><span class="badge" style="color:${CAT_PA[cat].c}">${CAT_PA[cat].t}</span></div>
+    ${nota}${esPaciente && cat === 'grave' ? GRAVE_HTML : ''}
+    ${promedio}
+    <h3 style="font-size:1rem;margin:16px 0 4px">Sistólica (mmHg)</h3>
+    ${serie('sistolica', ZONAS_SIS, 80, 150)}
+    <h3 style="font-size:1rem;margin:16px 0 4px">Diastólica (mmHg)</h3>
+    ${serie('diastolica', ZONAS_DIA, 50, 100)}
+    ${leyendaPA()}
+    <p class="nota" style="margin:8px 0 0">Clasificación AHA/ACC 2025. Cuando las dos cifras caen en categorías distintas, cuenta la más alta. El diagnóstico se hace con el promedio de 2 o más mediciones en 2 o más ocasiones.</p>
+  </div>
+  ${panelSerie({ titulo: 'Pulso en reposo', unidad: 'lpm', puntos: pulso, ref: REF_PULSO, esPaciente })}`;
+}
+
+function laboratoriosHTML(regs, p, esPaciente) {
+  p = p || {};
+  const bloques = [];
+  if (tieneMeta(p)) {
+    bloques.push(panelSerie({ titulo: 'INR', unidad: '', puntos: puntosDe(regs, r => r.inr != null, r => r.inr), ref: refINR(p), esPaciente }));
+  }
+  for (const l of LABS) {
+    const meta = !esPaciente && l.n === 'LDL' && LDL_META[p.riesgo_cv] != null ? LDL_META[p.riesgo_cv] : null;
+    const guias = (GUIAS_LAB[l.n] || []).concat(meta != null ? [{ v: meta, t: 'Meta' }] : []);
+    bloques.push(panelSerie({
+      titulo: l.n, unidad: l.u, esPaciente, guias,
+      puntos: puntosDe(regs, r => r.tipo === 'laboratorio' && r.lab_nombre === l.n, r => r.lab_valor),
+      ref: REF_LAB[l.n](p.sexo),
+      metaTexto: meta != null ? `Meta según riesgo ${p.riesgo_cv.toLowerCase()} (ESC/EAS 2019): menos de ${meta} mg/dL.` : ''
+    }));
+  }
+  bloques.push(panelSerie({ titulo: 'Peso', unidad: 'kg', esPaciente, puntos: puntosDe(regs, r => r.tipo === 'peso' && r.peso_kg != null, r => r.peso_kg) }));
+  bloques.push(panelSerie({ titulo: 'IMC', unidad: 'kg/m²', esPaciente, puntos: puntosIMC(regs), ref: REF_IMC }));
+  const glu = regs.filter(r => r.tipo === 'glucosa' && r.glucosa_mgdl != null)
+    .map(r => ({ t: r.medido_en, v: Number(r.glucosa_mgdl), ref: refGlucometria(r.glucosa_momento) }))
+    .sort((a, b) => new Date(a.t) - new Date(b.t)).slice(-30);
+  if (glu.length) {
+    const ult = glu[glu.length - 1];
+    const dentro = enRango(ult.v, ult.ref);
+    bloques.push(`<div class="panel" style="padding-top:12px">
+      <strong>Glucometría</strong>
+      <div style="margin:4px 0 8px">Último: <strong>${fmt(ult.v)} mg/dL</strong> <span class="nota">(${esc(fechaCorta(ult.t))})</span>
+        ${esPaciente ? '' : `<span class="badge" style="color:${dentro ? COLOR_DENTRO : COLOR_FUERA}">${dentro ? 'Dentro del rango' : 'Fuera del rango'}</span>`}</div>
+      ${esPaciente && !dentro ? `<div class="ref-nota">${NOTA_REF}</div>` : ''}
+      ${svgSerie({ puntos: glu, titulo: 'glucometría', guias: [{ v: 100, t: 'Ayunas' }, { v: 140, t: 'Después de comer' }], colorDe: q => enRango(q.v, q.ref) ? COLOR_DENTRO : COLOR_FUERA })}
+      <p class="nota" style="margin:6px 0 0">Rango de referencia: 70 a 99 mg/dL en ayunas o antes de comer; menos de 140 mg/dL después de comer. Cada punto se compara con el momento en que se midió.</p>
+    </div>`);
+  }
+  const hay = bloques.filter(Boolean);
+  const titulo = esPaciente ? 'Mis estudios, peso y glucosa' : 'Peso, laboratorio y glucosa';
+  return `<h2>${titulo}</h2>${hay.length ? hay.join('') : '<p class="vacio">Aún no hay peso, laboratorio ni glucometrías registrados.</p>'}`;
+}
+
+/* ================== DIAGNÓSTICOS ================== */
+const DX_CATEGORIAS = ['Hipertensión arterial', 'Insuficiencia cardiaca', 'Fibrilación o aleteo auricular', 'Otra arritmia',
+  'Cardiopatía isquémica', 'Valvulopatía', 'Diabetes mellitus', 'Dislipidemia', 'Enfermedad renal crónica', 'Obesidad',
+  'Enfermedad vascular cerebral', 'Otro'];
+const fechaDia = d => d ? new Date(d + 'T12:00:00').toLocaleDateString('es', { day: 'numeric', month: 'long', year: 'numeric' }) : '';
+const ordenarDx = lista => lista.slice().sort((a, b) => String(b.fecha || '').localeCompare(String(a.fecha || '')));
+
+function dxItemHTML(d, conBoton) {
+  return `<li class="item">
+    <div class="fila-btn"><div class="que">${esc(d.categoria)}${d.detalle ? ': ' + esc(d.detalle) : ''}</div>
+      ${conBoton ? `<button class="enlace" data-quitar-dx="${d.id}" style="flex:none">Quitar</button>` : ''}</div>
+    ${d.fecha ? `<div class="cuando">Desde ${esc(fechaDia(d.fecha))}</div>` : ''}
+    ${d.nota ? `<div>${esc(d.nota)}</div>` : ''}
+  </li>`;
+}
+
+function diagnosticosPacienteHTML(lista) {
+  return `<h2>Mis diagnósticos</h2>
+    ${lista.length ? `<ul class="lista">${ordenarDx(lista).map(d => dxItemHTML(d, false)).join('')}</ul>` : '<p class="vacio">Su médico todavía no ha registrado diagnósticos en la aplicación.</p>'}
+    <p class="nota" style="margin-top:12px">Si tiene dudas sobre sus diagnósticos o su tratamiento, coméntelas con su médico en su consulta.</p>`;
+}
+
+function diagnosticosAdminHTML(p) {
+  const lista = ordenarDx(state.dx.filter(d => d.paciente_id === p.id));
+  return `<h2>Diagnósticos</h2>
+    <div class="msg ok" id="msg-dx-top" role="status">${esc(state.msgDx || '')}</div>
+    ${lista.length ? `<ul class="lista">${lista.map(d => dxItemHTML(d, true)).join('')}</ul>` : '<p class="vacio">Sin diagnósticos registrados.</p>'}
+    <details>
+      <summary>Agregar diagnóstico</summary>
+      <label for="dx-cat">Diagnóstico</label>
+      <select id="dx-cat"><option value="">Elegir…</option>${DX_CATEGORIAS.map(c => `<option>${esc(c)}</option>`).join('')}</select>
+      <label for="dx-det">Detalle (opcional)</label>
+      <input id="dx-det" placeholder="Por ejemplo: con fracción de expulsión reducida">
+      <label for="dx-fecha">Fecha del diagnóstico</label>
+      <input id="dx-fecha" type="date" value="${ahoraLocal().slice(0, 10)}">
+      <label for="dx-nota">Explicación para el paciente (opcional)</label>
+      <textarea id="dx-nota"></textarea>
+      <p class="nota">El paciente verá el diagnóstico, el detalle, la fecha y esta explicación en «Mis diagnósticos».</p>
+      <div class="msg" id="msg-dx" role="status"></div>
+      <button class="primario" id="guardar-dx" style="margin-bottom:12px">Guardar diagnóstico</button>
+    </details>`;
+}
+
+function enlazarDiagnosticos(p) {
+  state.msgDx = '';
+  const msg = document.getElementById('msg-dx');
+  document.getElementById('guardar-dx').onclick = async () => {
+    const categoria = document.getElementById('dx-cat').value;
+    const detalle = document.getElementById('dx-det').value.trim();
+    if (!categoria) { msg.className = 'msg error'; msg.textContent = 'Elige el diagnóstico.'; return; }
+    if (categoria === 'Otro' && !detalle) { msg.className = 'msg error'; msg.textContent = 'Escribe el diagnóstico en «Detalle».'; return; }
+    const fila = { paciente_id: p.id, categoria, detalle: detalle || null, fecha: document.getElementById('dx-fecha').value || null, nota: document.getElementById('dx-nota').value.trim() || null };
+    const { error } = await db.from('diagnosticos').insert(fila);
+    if (error) { msg.className = 'msg error'; msg.textContent = 'No se pudo guardar: ' + error.message + ' (¿ya ejecutó el archivo SQL de esta actualización?)'; return; }
+    await recargarDx();
+    state.msgDx = 'Diagnóstico guardado.';
+    pintarPaciente();
+  };
+  document.querySelectorAll('[data-quitar-dx]').forEach(b => b.onclick = async () => {
+    if (b.dataset.confirmar !== '1') { b.dataset.confirmar = '1'; b.textContent = 'Toque otra vez para quitar'; return; }
+    const { error } = await db.from('diagnosticos').delete().eq('id', b.dataset.quitarDx);
+    if (error) { b.textContent = 'No se pudo quitar'; return; }
+    await recargarDx();
+    state.msgDx = 'Diagnóstico quitado.';
+    pintarPaciente();
+  });
+}
+
+async function recargarDx() {
+  const { data } = await db.from('diagnosticos').select('*');
+  state.dx = data || [];
+}
+
+/* ================== DATOS DEL PACIENTE (sexo y sector) ================== */
+function datosPacienteHTML(p) {
+  const nombres = state.sectores.map(s => s.nombre);
+  const extra = p.sector && !nombres.includes(p.sector) ? [p.sector] : [];
+  return `<h2>Datos del paciente</h2>
+  <div class="panel" style="padding-top:12px">
+    <label for="sexo">Sexo</label>
+    <select id="sexo"><option value="">Sin registrar</option><option value="F"${p.sexo === 'F' ? ' selected' : ''}>Mujer</option><option value="M"${p.sexo === 'M' ? ' selected' : ''}>Hombre</option></select>
+    <p class="nota" style="margin:4px 0 0">Ajusta los rangos de referencia de creatinina y HDL.</p>
+    <label for="sector">Colonia o sector</label>
+    <select id="sector"><option value="">Sin asignar</option>${nombres.concat(extra).map(n => `<option${n === p.sector ? ' selected' : ''}>${esc(n)}</option>`).join('')}</select>
+    ${state.sectores.length ? '' : '<p class="nota" style="margin:4px 0 0">Todavía no hay sectores. Créelos en «Mapa de pacientes».</p>'}
+    <div class="msg" id="msg-datos" role="status"></div>
+    <button class="primario" id="guardar-datos">Guardar datos</button>
+  </div>`;
+}
+
+function enlazarDatos(p) {
+  const msg = document.getElementById('msg-datos');
+  document.getElementById('guardar-datos').onclick = async () => {
+    const sexo = document.getElementById('sexo').value || null;
+    const sector = document.getElementById('sector').value || null;
+    const { error } = await db.from('profiles').update({ sexo, sector }).eq('id', p.id);
+    if (error) { msg.className = 'msg error'; msg.textContent = 'No se pudo guardar: ' + error.message + ' (¿ya ejecutó el archivo SQL de esta actualización?)'; return; }
+    p.sexo = sexo; p.sector = sector;
+    msg.className = 'msg ok'; msg.textContent = 'Guardado.';
+  };
+}
+
+/* ================== MAPA DE PACIENTES (solo administrador) ================== */
+const CENTRO_MANTE = [22.743, -98.9739];
+let mapaLeaflet = null, sectorPendiente = null;
+
+function cargarLeaflet() {
+  if (window.L) return Promise.resolve();
+  return new Promise((ok, falla) => {
+    const css = document.createElement('link');
+    css.rel = 'stylesheet'; css.href = 'https://unpkg.com/leaflet@1.9.4/dist/leaflet.css';
+    document.head.appendChild(css);
+    const s = document.createElement('script');
+    s.src = 'https://unpkg.com/leaflet@1.9.4/dist/leaflet.js';
+    s.onload = ok; s.onerror = falla;
+    document.head.appendChild(s);
+  });
+}
+
+function conteoPorSector(filtro) {
+  const conteo = {}; let sinSector = 0, total = 0;
+  for (const p of state.pacientes) {
+    if (filtro && !state.dx.some(d => d.paciente_id === p.id && d.categoria === filtro)) continue;
+    total++;
+    if (p.sector) conteo[p.sector] = (conteo[p.sector] || 0) + 1; else sinSector++;
+  }
+  return { conteo, sinSector, total };
+}
+
+function colorEscala(t) {
+  const paradas = [[245, 197, 66], [240, 140, 46], [198, 40, 40]];
+  const u = Math.max(0, Math.min(1, t)) * 2, i = Math.min(1, Math.floor(u)), f = u - i;
+  const c = paradas[i].map((v, k) => Math.round(v + (paradas[i + 1][k] - v) * f));
+  return `rgb(${c[0]},${c[1]},${c[2]})`;
+}
+
+function quitarMapa() { if (mapaLeaflet) { mapaLeaflet.remove(); mapaLeaflet = null; } sectorPendiente = null; }
+
+async function pintarMapa() {
+  quitarMapa();
+  const filtro = state.filtroMapa || '';
+  const { conteo, sinSector, total } = conteoPorSector(filtro);
+  const maxN = Math.max(1, ...Object.values(conteo));
+  const filas = Object.entries(conteo).sort((a, b) => b[1] - a[1]);
+  const ubicados = new Set(state.sectores.map(s => s.nombre));
+  app.innerHTML = `
+    ${encabezado('Administrador')}
+    <button id="volver" class="enlace" style="padding-left:0">Volver a pacientes</button>
+    <h2 style="margin-top:4px">Mapa de pacientes</h2>
+    <label for="filtro-dx">Enfermedad</label>
+    <select id="filtro-dx"><option value="">Todos los pacientes</option>${DX_CATEGORIAS.map(c => `<option${c === filtro ? ' selected' : ''}>${esc(c)}</option>`).join('')}</select>
+    <div id="mapa" role="region" aria-label="Mapa de Cd. Mante y la región"><p class="vacio" style="padding:16px">Cargando mapa…</p></div>
+    <div class="leyenda" style="align-items:center">
+      <span>Menos</span><span class="escala"></span><span>Más pacientes</span>
+    </div>
+    <p class="nota" style="margin:6px 0 0">${filtro ? esc(filtro) + ': ' : ''}${total} paciente(s). ${sinSector ? sinSector + ' sin sector asignado.' : ''}</p>
+    <h2>Por sector</h2>
+    ${filas.length ? `<table class="tabla"><thead><tr><th>Sector</th><th class="num">Pacientes</th></tr></thead><tbody>
+      ${filas.map(([s, n]) => `<tr><td>${esc(s)}${ubicados.has(s) ? '' : ' <span class="nota">(sin ubicar en el mapa)</span>'}</td><td class="num"><strong>${n}</strong></td></tr>`).join('')}
+    </tbody></table>` : '<p class="vacio">Ningún paciente tiene sector asignado todavía. Asígnelo en la ficha de cada paciente, o el paciente lo elige al crear su cuenta.</p>'}
+    <details${state.sectores.length ? '' : ' open'}>
+      <summary>Sectores del mapa (${state.sectores.length})</summary>
+      <p>Escriba el nombre de la colonia, sector o localidad, toque «Ubicar en el mapa» y después toque el mapa en el lugar que le corresponde.</p>
+      <label for="nuevo-sector">Nombre del sector</label>
+      <input id="nuevo-sector" placeholder="Por ejemplo: Zona Centro">
+      <div class="msg" id="msg-sector" role="status"></div>
+      <button class="primario" id="ubicar-sector">Ubicar en el mapa</button>
+      ${state.sectores.length ? `<ul class="lista" style="margin:16px 0 12px">${state.sectores.map(s => `<li class="item"><div class="fila-btn"><span>${esc(s.nombre)}</span><button class="enlace" data-quitar-sector="${s.id}" style="flex:none">Quitar</button></div></li>`).join('')}</ul>` : ''}
+    </details>
+    <p class="nota" style="margin-top:16px">Solo usted ve este mapa. Muestra cuántos pacientes hay por sector, no domicilios. Evite compartir capturas donde un sector con muy pocos pacientes permita identificarlos.</p>`;
+
+  document.getElementById('salir').onclick = salir;
+  document.getElementById('volver').onclick = () => { quitarMapa(); state.vistaAdmin = 'lista'; pintarAdmin(); };
+  document.getElementById('filtro-dx').onchange = e => { state.filtroMapa = e.target.value; pintarMapa(); };
+  const msgS = document.getElementById('msg-sector');
+  document.getElementById('ubicar-sector').onclick = () => {
+    const nombre = document.getElementById('nuevo-sector').value.trim();
+    if (!nombre) { msgS.className = 'msg error'; msgS.textContent = 'Escriba el nombre del sector.'; return; }
+    if (state.sectores.some(s => s.nombre.toLowerCase() === nombre.toLowerCase())) { msgS.className = 'msg error'; msgS.textContent = 'Ese sector ya existe.'; return; }
+    sectorPendiente = nombre;
+    msgS.className = 'msg ok'; msgS.textContent = `Ahora toque el mapa en el lugar de «${nombre}».`;
+    document.getElementById('mapa').scrollIntoView({ behavior: 'smooth', block: 'center' });
+  };
+  document.querySelectorAll('[data-quitar-sector]').forEach(b => b.onclick = async () => {
+    if (b.dataset.confirmar !== '1') { b.dataset.confirmar = '1'; b.textContent = 'Toque otra vez para quitar'; return; }
+    const { error } = await db.from('sectores').delete().eq('id', b.dataset.quitarSector);
+    if (error) { b.textContent = 'No se pudo quitar'; return; }
+    await recargarSectores(); pintarMapa();
+  });
+
+  try { await cargarLeaflet(); }
+  catch (e) { document.getElementById('mapa').innerHTML = '<p class="vacio" style="padding:16px">No se pudo cargar el mapa. Revise su conexión a internet.</p>'; return; }
+  const div = document.getElementById('mapa');
+  if (!div) return;
+  div.innerHTML = '';
+  mapaLeaflet = L.map(div).setView(CENTRO_MANTE, 11);
+  L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom: 18, attribution: '&copy; OpenStreetMap' }).addTo(mapaLeaflet);
+  const marcas = [];
+  for (const s of state.sectores) {
+    const n = conteo[s.nombre] || 0;
+    const col = n ? colorEscala(n / maxN) : '#8A9BA0';
+    const c = L.circleMarker([s.lat, s.lng], { radius: n ? 10 + 16 * Math.sqrt(n / maxN) : 6, color: col, fillColor: col, fillOpacity: n ? 0.6 : 0.3, weight: 2 })
+      .addTo(mapaLeaflet)
+      .bindTooltip(`${s.nombre}: ${n} paciente(s)`, { permanent: n > 0, direction: 'top', offset: [0, -6] });
+    marcas.push(c);
+  }
+  if (marcas.length > 1) mapaLeaflet.fitBounds(L.featureGroup(marcas).getBounds().pad(0.3), { maxZoom: 14 });
+  mapaLeaflet.on('click', async ev => {
+    if (!sectorPendiente) return;
+    const nombre = sectorPendiente; sectorPendiente = null;
+    const { error } = await db.from('sectores').insert({ nombre, lat: ev.latlng.lat, lng: ev.latlng.lng });
+    if (error) { msgS.className = 'msg error'; msgS.textContent = 'No se pudo guardar: ' + error.message + ' (¿ya ejecutó el archivo SQL de esta actualización?)'; return; }
+    await recargarSectores(); pintarMapa();
+  });
+  setTimeout(() => { if (mapaLeaflet) mapaLeaflet.invalidateSize(); }, 200);
+}
+
+async function recargarSectores() {
+  const { data } = await db.from('sectores').select('*').order('nombre');
+  state.sectores = data || [];
+}
+
 /* ================== ACCESO ================== */
 /* Mensajes claros para los errores de acceso (Supabase devuelve textos en inglés). */
 function mensajeAcceso(error) {
@@ -575,6 +990,7 @@ function vistaAcceso(modo = 'entrar', aviso = '') {
     <div class="panel">
       <form id="f-acceso" novalidate>
         ${reg ? '<label for="nombre">Nombre completo</label><input id="nombre" autocomplete="name" required>' : ''}
+        ${reg ? '<label for="reg-sector" id="lbl-sector" hidden>Colonia o localidad donde vive (opcional)</label><select id="reg-sector" hidden><option value="">Prefiero no decir</option></select>' : ''}
         ${nue ? '' : campoCorreo}
         ${olv ? '' : campoClave(reg ? 'Contraseña (mínimo 8 caracteres)' : nue ? 'Nueva contraseña (mínimo 8 caracteres)' : 'Contraseña')}
         <div class="msg error" id="msg" role="alert">${esc(aviso)}</div>
@@ -601,6 +1017,14 @@ function vistaAcceso(modo = 'entrar', aviso = '') {
     }
   };
 
+  if (reg) {
+    db.from('sectores').select('nombre').order('nombre').then(({ data }) => {
+      const sel = document.getElementById('reg-sector');
+      if (!sel || !data || !data.length) return;
+      sel.insertAdjacentHTML('beforeend', data.map(x => `<option>${esc(x.nombre)}</option>`).join(''));
+      sel.hidden = false; document.getElementById('lbl-sector').hidden = false;
+    });
+  }
   const bOlv = document.getElementById('olvide');
   if (bOlv) bOlv.onclick = () => vistaAcceso('olvide');
   const bCam = document.getElementById('cambiar');
@@ -638,7 +1062,9 @@ function vistaAcceso(modo = 'entrar', aviso = '') {
     if (reg) {
       const nombre = document.getElementById('nombre').value.trim();
       if (nombre.length < 3) { mostrar('Escriba su nombre completo.', false); return; }
-      const { data, error } = await db.auth.signUp({ email: correo, password: clave, options: { data: { nombre }, emailRedirectTo: urlApp() } });
+      const elSector = document.getElementById('reg-sector');
+      const sector = elSector && !elSector.hidden ? elSector.value : '';
+      const { data, error } = await db.auth.signUp({ email: correo, password: clave, options: { data: { nombre, sector }, emailRedirectTo: urlApp() } });
       if (error) { const m = mensajeAcceso(error); mostrar(m.texto, false, m.reenviar ? correo : ''); return; }
       if (data.user && Array.isArray(data.user.identities) && data.user.identities.length === 0) {
         mostrar('Ese correo ya tiene una cuenta. Toque «Ya tengo cuenta: entrar». Si olvidó su contraseña, use «Olvidé mi contraseña».', false);
@@ -652,7 +1078,7 @@ function vistaAcceso(modo = 'entrar', aviso = '') {
   };
 }
 
-async function salir() { if (state.canal) { db.removeChannel(state.canal); state.canal = null; } await db.auth.signOut(); }
+async function salir() { quitarMapa(); state.vistaAdmin = 'lista'; state.sel = null; state.pestana = 'registrar'; if (state.canal) { db.removeChannel(state.canal); state.canal = null; } await db.auth.signOut(); }
 
 function encabezado(subtitulo) {
   return `<div class="top"><div class="marca"><img class="logo" src="icon-192.png" alt=""><div><h1>CardioControl Mante</h1><div class="quien">${esc(subtitulo)}</div></div></div>
@@ -664,7 +1090,7 @@ async function vistaPaciente() {
   const { data: perfilFresco } = await db.from('profiles').select('*').eq('id', state.user.id).single();
   if (perfilFresco) state.perfil = perfilFresco;
   const { data, error } = await db.from('registros').select('*')
-    .eq('paciente_id', state.user.id).order('medido_en', { ascending: false }).limit(40);
+    .eq('paciente_id', state.user.id).order('medido_en', { ascending: false }).limit(300);
   state.regs = error ? [] : data;
   const tallaPrevia = ultimaTalla(state.regs);
   const tipo = TIPOS[state.tipo];
@@ -678,12 +1104,19 @@ async function vistaPaciente() {
   };
 
   const pestanas = `<div class="tipos" role="group" aria-label="Sección">
-      <button data-pest="registrar" aria-pressed="${state.pestana === 'registrar'}">Anotar</button>
-      <button data-pest="guia" aria-pressed="${state.pestana === 'guia'}">Mi guía de cuidados</button>
+      ${[['registrar', 'Anotar'], ['graficas', 'Mis gráficas'], ['diagnosticos', 'Mis diagnósticos'], ['guia', 'Mi guía de cuidados']]
+        .map(([k, t]) => `<button data-pest="${k}" aria-pressed="${state.pestana === k}">${t}</button>`).join('')}
     </div>`;
   const enlazarPestanas = () => document.querySelectorAll('[data-pest]').forEach(b => b.onclick = () => { state.pestana = b.dataset.pest; vistaPaciente(); });
-  if (state.pestana === 'guia') {
-    app.innerHTML = `${encabezado(state.perfil.nombre || state.user.email)}${consultorioHTML()}${pestanas}${urgenciaHTML()}${guiaHTML(state.perfil)}`;
+  if (state.pestana !== 'registrar') {
+    let cuerpo = '';
+    if (state.pestana === 'guia') cuerpo = guiaHTML(state.perfil);
+    if (state.pestana === 'graficas') cuerpo = presionHTML(state.regs, true) + laboratoriosHTML(state.regs, state.perfil, true) + `<p class="nota" style="margin-top:16px">${FUENTES_REF}</p>`;
+    if (state.pestana === 'diagnosticos') {
+      const { data: misDx } = await db.from('diagnosticos').select('*').eq('paciente_id', state.user.id);
+      cuerpo = diagnosticosPacienteHTML(misDx || []);
+    }
+    app.innerHTML = `${encabezado(state.perfil.nombre || state.user.email)}${consultorioHTML()}${pestanas}${urgenciaHTML()}${cuerpo}`;
     document.getElementById('salir').onclick = salir;
     enlazarPestanas();
     return;
@@ -710,7 +1143,7 @@ async function vistaPaciente() {
       <button class="primario" type="submit">Guardar registro</button>
     </form>
     <h2>Mis últimos registros</h2>
-    ${state.regs.length ? `<ul class="lista">${state.regs.map(r => itemHTML(r, null, false, tallaPrevia)).join('')}</ul>` : '<p class="vacio">Todavía no has guardado ningún registro.</p>'}
+    ${state.regs.length ? `<ul class="lista">${state.regs.slice(0, 40).map(r => itemHTML(r, state.perfil, false, tallaPrevia, true)).join('')}</ul>` : '<p class="vacio">Todavía no has guardado ningún registro.</p>'}
     <p class="vacio" style="margin-top:24px">Si tiene dolor en el pecho, falta de aire intensa o desmayo, no use esta aplicación: llame a emergencias.</p>`;
 
   document.getElementById('salir').onclick = salir;
@@ -768,10 +1201,13 @@ async function guardarRegistro(e) {
   const { error } = await db.from('registros').insert(fila);
   if (error) { msg.className = 'msg error'; msg.textContent = 'No se pudo guardar: ' + error.message; return; }
   const posibleSintoma = state.tipo === 'palpitaciones' || (fila.notas && SINTOMAS_RE.test(sinAcentos(fila.notas)));
+  const catGuardada = fila.tipo === 'presion' ? categoriaPA(fila.sistolica, fila.diastolica) : null;
+  const fueraRef = fueraDeReferencia(fila, state.perfil, ultimaTalla(state.regs)).length > 0;
   await vistaPaciente();
   const nuevo = document.getElementById('msg');
   nuevo.className = 'msg ok'; nuevo.textContent = 'Registro guardado.';
-  if (posibleSintoma) nuevo.innerHTML = 'Registro guardado. <strong>Esta aplicación no se revisa en tiempo real.</strong> Si tiene dolor de pecho, falta de aire, desmayo o malestar importante, llame al ' + URGENCIAS.numero + ' o acuda a urgencias.';
+  if (fueraRef) nuevo.innerHTML = 'Registro guardado.<div class="ref-nota">' + NOTA_REF + '</div>' + (catGuardada === 'grave' ? GRAVE_HTML : '');
+  if (posibleSintoma) nuevo.innerHTML += '<div style="margin-top:6px"><strong>Esta aplicación no se revisa en tiempo real.</strong> Si tiene dolor de pecho, falta de aire, desmayo o malestar importante, llame al ' + URGENCIAS.numero + ' o acuda a urgencias.</div>';
 }
 
 /* ================== ADMINISTRADOR ================== */
@@ -779,22 +1215,35 @@ async function vistaAdmin() {
   await cargarAdmin();
   if (!state.canal) {
     state.canal = db.channel('registros-nuevos')
-      .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'registros' }, () => cargarAdmin())
+      .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'registros' }, () => refrescarAdmin())
       .subscribe();
   }
 }
 
-async function cargarAdmin() {
-  const [p, r] = await Promise.all([
+async function cargarDatosAdmin() {
+  const [p, r, d, se] = await Promise.all([
     db.from('profiles').select('*').eq('rol', 'paciente').order('nombre'),
-    db.from('registros').select('*').order('medido_en', { ascending: false }).limit(2000)
+    db.from('registros').select('*').order('medido_en', { ascending: false }).limit(3000),
+    db.from('diagnosticos').select('*'),
+    db.from('sectores').select('*').order('nombre')
   ]);
   state.pacientes = p.data || [];
   state.regs = r.data || [];
-  pintarAdmin();
+  state.dx = d.data || [];
+  state.sectores = se.data || [];
+}
+
+async function cargarAdmin() { await cargarDatosAdmin(); pintarAdmin(); }
+
+/* Con un registro nuevo se actualizan los datos; no se redibuja si usted está escribiendo o en el mapa. */
+async function refrescarAdmin() {
+  const ocupado = state.vistaAdmin === 'mapa' || ['INPUT', 'SELECT', 'TEXTAREA'].includes((document.activeElement || {}).tagName);
+  await cargarDatosAdmin();
+  if (!ocupado) pintarAdmin();
 }
 
 function pintarAdmin() {
+  if (state.vistaAdmin === 'mapa') return pintarMapa();
   if (state.sel) return pintarPaciente();
   const hace7 = Date.now() - 7 * 864e5;
   const filas = state.pacientes.map(p => {
@@ -808,6 +1257,7 @@ function pintarAdmin() {
       <a class="btn-wa" href="${enlaceWhatsApp()}" target="_blank" rel="noopener">Invitar paciente por WhatsApp</a>
       <button id="copiar">Copiar enlace</button>
     </div>
+    <button class="secundario" id="ver-mapa" style="margin-bottom:16px">Mapa de pacientes por sector y enfermedad</button>
     <h2 style="margin-top:0">Pacientes (${filas.length})</h2>
     ${filas.length ? `<ul class="lista">${filas.map(({ p, regs, nAl }) => `
       <li><button class="pac item${nAl ? ' alerta' : ''}" data-pac="${p.id}">
@@ -815,30 +1265,14 @@ function pintarAdmin() {
         <div class="d">${regs.length ? 'Último registro: ' + esc(fecha(regs[0].medido_en)) : 'Sin registros'}</div>
         <div class="d">${metaTextoAdmin(p)}</div>
         ${p.riesgo_cv ? `<div class="d">Riesgo cardiovascular: ${esc(p.riesgo_cv)}</div>` : ''}
+        ${(() => { const c = [...new Set(state.dx.filter(d => d.paciente_id === p.id).map(d => d.categoria))]; return c.length ? `<div class="d">Diagnósticos: ${esc(c.join(', '))}</div>` : ''; })()}
+        ${p.sector ? `<div class="d">Sector: ${esc(p.sector)}</div>` : ''}
         ${nAl ? `<div class="aviso">${nAl} registro(s) con alerta en 7 días</div>` : ''}
       </button></li>`).join('')}</ul>` : '<p class="vacio">Aún no hay pacientes registrados. Comparte el enlace de la app para que creen su cuenta.</p>'}`;
   document.getElementById('salir').onclick = salir;
   document.getElementById('copiar').onclick = copiarEnlace;
+  document.getElementById('ver-mapa').onclick = () => { state.vistaAdmin = 'mapa'; pintarMapa(); };
   document.querySelectorAll('[data-pac]').forEach(b => b.onclick = () => { state.sel = b.dataset.pac; pintarAdmin(); });
-}
-
-function grafica(regs) {
-  const p = regs.filter(r => r.tipo === 'presion').slice(0, 30).reverse();
-  if (p.length < 2) return '<p class="vacio">Se necesitan al menos 2 mediciones de presión para graficar.</p>';
-  const W = 320, H = 150, m = 26;
-  const vals = p.flatMap(r => [r.sistolica, r.diastolica]).filter(v => v != null);
-  const min = Math.min(...vals, 50) - 5, max = Math.max(...vals, 140) + 5;
-  const x = i => m + i * (W - m * 1.5) / (p.length - 1);
-  const y = v => H - m + 4 - (v - min) * (H - m * 1.6) / (max - min);
-  const linea = k => p.map((r, i) => r[k] == null ? null : `${x(i).toFixed(1)},${y(r[k]).toFixed(1)}`).filter(Boolean).join(' ');
-  return `<svg viewBox="0 0 ${W} ${H}" role="img" aria-label="Tendencia de presión arterial">
-      <text x="2" y="${y(max - 5).toFixed(0)}">${Math.round(max - 5)}</text>
-      <text x="2" y="${y(min + 5).toFixed(0)}">${Math.round(min + 5)}</text>
-      <line x1="${m}" x2="${W}" y1="${y(LIM.sistolica[1]).toFixed(1)}" y2="${y(LIM.sistolica[1]).toFixed(1)}" stroke="var(--alert)" stroke-dasharray="2 4" opacity=".6"/>
-      <polyline points="${linea('sistolica')}" fill="none" stroke="var(--brand)" stroke-width="2.5" stroke-linejoin="round"/>
-      <polyline points="${linea('diastolica')}" fill="none" stroke="var(--muted)" stroke-width="2.5" stroke-dasharray="5 3" stroke-linejoin="round"/>
-    </svg>
-    <div class="leyenda"><span>Línea continua: sistólica</span><span>Línea discontinua: diastólica</span></div>`;
 }
 
 function pintarPaciente() {
@@ -850,16 +1284,21 @@ function pintarPaciente() {
     ${encabezado('Administrador')}
     <button id="volver" class="enlace" style="padding-left:0">Volver a pacientes</button>
     <h2 style="margin-top:4px">${esc(p.nombre || 'Sin nombre')}</h2>
-    <div class="panel" style="padding-top:16px">${grafica(regs)}</div>
+    ${datosPacienteHTML(p)}
+    ${diagnosticosAdminHTML(p)}
+    ${presionHTML(regs, false)}
     ${riesgoHTML(p)}
     ${anticoagulacionHTML(p)}
-    ${laboratoriosHTML(regs, p)}
+    ${laboratoriosHTML(regs, p, false)}
+    <p class="nota" style="margin-top:12px">${FUENTES_REF}</p>
     <h2>Historial</h2>
-    ${regs.length ? `<ul class="lista">${regs.slice(0, 100).map(r => itemHTML(r, p, true, tallaRef)).join('')}</ul>` : '<p class="vacio">Sin registros.</p>'}`;
+    ${regs.length ? `<ul class="lista">${regs.slice(0, 100).map(r => itemHTML(r, p, true, tallaRef, false)).join('')}</ul>` : '<p class="vacio">Sin registros.</p>'}`;
   document.getElementById('salir').onclick = salir;
   document.getElementById('volver').onclick = () => { state.sel = null; pintarAdmin(); };
   enlazarAnticoagulacion(p);
   enlazarRiesgo(p);
+  enlazarDatos(p);
+  enlazarDiagnosticos(p);
 }
 
 /* ================== COMPARTIR E INSTALAR ================== */
